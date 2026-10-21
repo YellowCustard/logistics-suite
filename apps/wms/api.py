@@ -395,9 +395,9 @@ class MovementOut(Schema):
     reason: str
 
 
-def _stock_ref(principal: Principal, body: StockRefIn) -> tuple[adjustments.StockRef, object]:
+def _stock_ref(principal: Principal, body: StockRefIn, roles: tuple[str, ...]) -> tuple[adjustments.StockRef, object]:
     require_staff(principal)
-    require_roles(principal, *SUPERVISORS)
+    require_roles(principal, *roles)
     if not principal.can_see_site(body.site_id):
         raise Problem(404, "Not found", "Unknown site.")
     item = adjustments.find_item(client_id=body.client_id, sku=body.sku, barcode=body.barcode)
@@ -417,7 +417,7 @@ def _stock_ref(principal: Principal, body: StockRefIn) -> tuple[adjustments.Stoc
 
 @router.post("/inventory/adjustments", response={201: MovementOut})
 def adjust_stock(request, body: AdjustmentIn):
-    ref, item = _stock_ref(principal_of(request), body)
+    ref, item = _stock_ref(principal_of(request), body, SUPERVISORS)
     if body.qty_delta == 0:
         raise Problem(422, "Invalid quantity", "qty_delta must not be zero.")
     sign = 1 if body.qty_delta > 0 else -1
@@ -427,7 +427,8 @@ def adjust_stock(request, body: AdjustmentIn):
 
 @router.post("/inventory/moves", response={201: MovementOut})
 def move_stock(request, body: MoveIn):
-    ref, item = _stock_ref(principal_of(request), body)
+    # Moves don't change quantities, so operators can make them; every move is a ledger entry with its author.
+    ref, item = _stock_ref(principal_of(request), body, OPERATORS)
     base = masterdata.to_base_qty(item, body.qty, body.uom or item.base_uom)
     movement = adjustments.move(ref, body.to_location_code, base, command_id=body.command_id, reason=body.reason)
     return Status(201, movement)

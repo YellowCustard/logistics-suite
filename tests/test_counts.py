@@ -208,7 +208,7 @@ def test_codes_shared_by_two_clients_need_the_client_named(wh):
 
 
 def test_moves(wh):
-    sup = api_for(wh["sup"])
+    sup = api_for(wh["op"])  # operators move stock; only corrections need a supervisor
     move = {
         "site_id": str(wh["teak"].pk),
         "location_code": "A-01",
