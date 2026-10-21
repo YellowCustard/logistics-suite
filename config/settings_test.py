@@ -13,3 +13,4 @@ SECURE_SSL_REDIRECT = False
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]  # speed only; never in production
 STORAGES = {**STORAGES, "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"}}  # noqa: F405
 STATIC_ROOT = tempfile.mkdtemp(prefix="logistics-test-static-")
+LOGIN_RATE_LIMIT = "10000/m"  # the suite signs in far more often than a person would

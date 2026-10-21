@@ -75,6 +75,8 @@ CI (`.github/workflows/ci.yml`) runs all of the above plus `check --deploy` and 
 | Inventory reconciliation | Schedule `manage.py reconcile_inventory` nightly. It compares every balance with its movement ledger and opens a critical `inventory.ledger_drift` case on any difference. |
 | Cycle counts | A supervisor opens a count on a set of bins (`POST /cycle-counts`). Operators scan what they find; they see only their own lines, never system quantities. Uncounted stock in those bins counts as zero on submit. Variances within `INVENTORY_VARIANCE_APPROVAL_PCT` (default 2%) post at once; anything larger, or any stock found in an empty bin, waits for a site manager who neither counted nor submitted it. |
 | Stock corrections | `POST /inventory/adjustments` (supervisors, reason required) posts immediately. A correction over the same threshold opens an `inventory.adjustment_review` case so a site manager reviews it after the fact. Every adjustment emits `wms.inventory.adjusted`. Bin-to-bin moves (`POST /inventory/moves`) are open to operators because they don't change quantities. |
+| Scanner | Operators open `/scanner/` on the device and sign in with their user (session cookie plus CSRF; 10 attempts a minute per address and worker, `LOGIN_RATE_LIMIT`). Receiving, putaway, counting and moves work offline: actions queue on the device and send in order when it reconnects. Refused actions show under **Activity** with the reason and changed nothing. |
+| Scanner sync | `POST /api/v1/sync/push` applies queued commands once each; every command is kept in `platform_synccommand` with its device and outcome. `GET /api/v1/sync/pull?site_id=&cursor=` serves reference data and open work; incremental pulls overlap by `SYNC_PULL_OVERLAP_SECONDS` (300). |
 | Receipt variances | Over, short or unexpected receipt lines open a `receipt.variance` case with the line-by-line detail. |
 | Audit log | Append-only, enforced by a database trigger. Read it in the admin under Audit entries. |
 | Rate cards | Published cards and their lines are immutable (database triggers). Changes mean a new version; publishing an open-ended newer version closes the older one the day before. |
@@ -108,3 +110,12 @@ CI (`.github/workflows/ci.yml`) runs all of the above plus `check --deploy` and 
 - `wms.inventory.adjusted` also carries `qty_before`, so consumers can judge the size of a correction without a lookup.
 - A count line records the system quantity when it is counted, so stock moved in or out of the bin before
   submission doesn't show up as a variance. Bins in an open count are not frozen.
+- The scanner is plain HTML and JavaScript served by Django (no build step), with a service worker for the
+  shell and IndexedDB for the queue and reference data. Camera scanning, printing and device-specific
+  features wait for the device spike; keyboard-wedge scanners work as they are.
+- Damaged goods aren't received on the scanner yet: they need photos, which arrive with the device spike.
+  Receive them through the API.
+- Offline commands carry their own ids and are applied once each, so `/sync/push` doesn't take an
+  `Idempotency-Key`. A refused command is final; the operator scans again, which is a new command.
+- A device pushes only the signed-in user's commands, so a shared scanner never sends one person's work
+  under another's name.
