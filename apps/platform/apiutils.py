@@ -62,3 +62,14 @@ def paginate(
     rows = list(qs.order_by("pk")[: limit + 1])
     next_cursor = rows[limit - 1].pk if len(rows) > limit else None
     return rows[:limit], next_cursor
+
+
+def acting_client_id(principal: Principal, client_id: uuid.UUID | None, *staff_roles: str) -> uuid.UUID:
+    """The client a write acts for: client principals always act for their own client (any client_id they
+    send is ignored); staff must hold one of `staff_roles` and name a client they can see."""
+    if principal.is_client_scoped:
+        return next(iter(principal.client_ids))
+    require_roles(principal, *staff_roles)
+    if client_id is None or not principal.can_see_client(client_id):
+        raise Problem(422, "client_id required", "Name a client you have access to.")
+    return client_id

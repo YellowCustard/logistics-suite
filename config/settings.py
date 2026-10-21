@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     "django.contrib.postgres",
     "apps.platform",
     "apps.masterdata",
+    "apps.oms",
     "apps.wms",
 ]
 

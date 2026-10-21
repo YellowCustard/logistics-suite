@@ -15,6 +15,8 @@ from apps.platform.context import current_actor
 
 from .models import (
     Contract,
+    Item,
+    ItemUom,
     Party,
     PartyRole,
     PartyRoleType,
@@ -191,3 +193,35 @@ def price_for(*, client_id: uuid.UUID, charge_type: str, on: date, site_id: uuid
 
 def money(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.0001"))
+
+
+# --- Units of measure ------------------------------------------------------------------------------------
+
+
+def uom_factor(item: Item, uom: str) -> int:
+    """Base units per `uom` for this item. The base UoM always has factor 1."""
+    uom = uom.strip().upper()
+    if uom == item.base_uom:
+        return 1
+    factor = ItemUom.objects.filter(item=item, uom=uom).values_list("factor", flat=True).first()
+    if factor is None:
+        raise Problem(422, "Unknown unit of measure", f"{item.sku} has no unit {uom!r}.")
+    return factor
+
+
+def to_base_qty(item: Item, qty: Decimal, uom: str) -> Decimal:
+    return qty * uom_factor(item, uom)
+
+
+def client_item(client_id: uuid.UUID, *, sku: str | None = None, barcode: str | None = None) -> Item:
+    """An active item of this client, found by SKU or by any of its barcodes."""
+    qs = Item.objects.filter(client_id=client_id, is_active=True)
+    if sku:
+        item = qs.filter(sku=sku.strip()).first()
+    elif barcode:
+        item = qs.filter(barcodes__barcode=barcode.strip()).first()
+    else:
+        raise Problem(422, "Item required", "Give a SKU or a barcode.")
+    if item is None:
+        raise Problem(422, "Unknown item", f"No active item {sku or barcode!r} for this client.")
+    return item

@@ -4,6 +4,7 @@ from ninja import NinjaAPI
 from ninja.errors import AuthenticationError, HttpError, ValidationError
 
 from apps.masterdata.api import router as masterdata_router
+from apps.oms.api import router as oms_router
 from apps.platform.api import auth_router, health_router, platform_router
 from apps.platform.apiutils import Problem
 from apps.platform.auth import BearerTokenAuth, PrincipalSessionAuth
@@ -55,4 +56,5 @@ api.add_router("/auth", auth_router)
 api.add_router("/", health_router)
 api.add_router("/", platform_router)
 api.add_router("/", masterdata_router)
+api.add_router("/", oms_router)
 api.add_router("/", wms_router)
