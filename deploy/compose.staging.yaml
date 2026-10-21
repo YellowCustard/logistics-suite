@@ -1,0 +1,50 @@
+# Staging/production overlay for a single self-managed VPS.
+# Usage (from the repo root on the server):
+#   docker compose -f compose.yaml -f deploy/compose.staging.yaml up -d --build
+# Only Caddy is reachable from outside (80/443). Postgres and the app stay on the internal network.
+services:
+  db:
+    ports: !reset []
+    restart: unless-stopped
+    shm_size: 256mb
+
+  web:
+    ports: !reset []
+    environment:
+      DJANGO_BEHIND_TLS_PROXY: "1"
+      DJANGO_SECURE_SSL_REDIRECT: "1"
+
+  caddy:
+    image: caddy:2.10.0
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+
+  backup:
+    image: restic/restic:0.18.0
+    profiles: ["ops"]  # run on demand or from the host timer, never as a long-lived service
+    entrypoint: ["/bin/sh", "/scripts/backup.sh"]
+    # Backup credentials live in their own file so the web and worker containers never see them.
+    # Needs RESTIC_REPOSITORY, RESTIC_PASSWORD and, for S3 storage, AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY.
+    env_file: !override
+      - backup.env
+    volumes:
+      - ./deploy/backup.sh:/scripts/backup.sh:ro
+      - media:/data/media:ro
+      - ${BACKUP_DUMP_DIR:-/var/lib/logistics/dump}:/data/dump
+
+volumes:
+  caddy_data:
+  caddy_config:
