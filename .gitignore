@@ -8,3 +8,4 @@ media/
 staticfiles/
 *.sqlite3
 .DS_Store
+backup.env

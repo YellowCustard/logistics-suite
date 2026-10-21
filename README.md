@@ -37,6 +37,8 @@ uv run python manage.py run_outbox       # second terminal: event delivery worke
 
 Or everything in containers: `cp .env.example .env`, fill in the secrets, then `docker compose up --build`.
 
+Staging and production run on a self-managed VPS: see [docs/staging.md](docs/staging.md).
+
 ## Checks
 
 ```bash
@@ -76,7 +78,7 @@ CI (`.github/workflows/ci.yml`) runs all of the above plus `check --deploy` and 
 | Receipt variances | Over, short or unexpected receipt lines open a `receipt.variance` case with the line-by-line detail. |
 | Audit log | Append-only, enforced by a database trigger. Read it in the admin under Audit entries. |
 | Rate cards | Published cards and their lines are immutable (database triggers). Changes mean a new version; publishing an open-ended newer version closes the older one the day before. |
-| Backups | Take daily `pg_dump` (or managed-database snapshots) **and** back up the media volume; documents are evidence and are referenced by key from the database. |
+| Backups | On the VPS, `deploy/ops.sh backup` runs nightly: a `pg_dump` plus the document volume, encrypted by restic and stored off-site. Rehearse `deploy/ops.sh restore-drill` monthly. See [docs/staging.md](docs/staging.md). |
 
 ## Deliberate deviations from the specification (M0)
 
