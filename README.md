@@ -73,6 +73,7 @@ CI (`.github/workflows/ci.yml`) runs all of the above plus `check --deploy` and 
 | Idempotency cleanup | Schedule `manage.py purge_idempotency` daily (cron or a scheduled container run). |
 | Encryption key rotation | Generate a key, put it **first** in `FIELD_ENCRYPTION_KEYS`, keep the old ones after it, deploy. Old values still decrypt and are re-encrypted on their next save. Never drop a key while rows may still use it. |
 | Inventory reconciliation | Schedule `manage.py reconcile_inventory` nightly. It compares every balance with its movement ledger and opens a critical `inventory.ledger_drift` case on any difference. |
+| ASN upload | `POST /api/v1/inbound-notices:import` takes a CSV (`client_ref, site_code, expected_at, sku` or `barcode`, `qty`, optional `uom, lot, expiry, kind, notes`). Rows sharing a `client_ref` become one ASN. One bad row rejects the whole file with row numbers; the file is kept as an import document. Staff add `?client_id=`. |
 | Receipt variances | Over, short or unexpected receipt lines open a `receipt.variance` case with the line-by-line detail. |
 | Audit log | Append-only, enforced by a database trigger. Read it in the admin under Audit entries. |
 | Rate cards | Published cards and their lines are immutable (database triggers). Changes mean a new version; publishing an open-ended newer version closes the older one the day before. |

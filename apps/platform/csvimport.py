@@ -7,7 +7,7 @@ rolls the whole file back. The uploaded file is kept as a Document for evidence.
 
 import csv
 import io
-from collections.abc import Callable
+from collections.abc import Callable, Hashable
 from dataclasses import dataclass
 from typing import Any
 
@@ -81,17 +81,46 @@ def run[Row: BaseModel](
     linked_type: str = "",
     linked_id: str = "",
 ) -> ImportResult:
+    result, _ = run_groups(
+        upload,
+        schema,
+        lambda row: id(row),
+        lambda rows: create_row(rows[0]),
+        client_id=client_id,
+        linked_type=linked_type,
+        linked_id=linked_id,
+    )
+    return result
+
+
+def run_groups[Row: BaseModel](
+    upload: UploadedFile,
+    schema: type[Row],
+    key: Callable[[Row], Hashable],
+    create_group: Callable[[list[Row]], Any],
+    *,
+    client_id=None,
+    linked_type: str = "",
+    linked_id: str = "",
+) -> tuple[ImportResult, list[Any]]:
+    """Like `run`, but rows sharing a key become one record (e.g. the lines of one ASN). Errors are reported
+    against the group's first row. Returns the result and whatever `create_group` returned, in file order."""
     rows = parse(upload, schema)
+    groups: dict[Hashable, list[tuple[int, Row]]] = {}
+    for line_no, row in enumerate(rows, start=2):
+        groups.setdefault(key(row), []).append((line_no, row))
     errors: list[dict[str, Any]] = []
+    created: list[Any] = []
     with transaction.atomic():
-        for line_no, row in enumerate(rows, start=2):
+        for members in groups.values():
+            first_line = members[0][0]
             try:
                 with transaction.atomic():
-                    create_row(row)
+                    created.append(create_group([row for _, row in members]))
             except Problem as exc:
-                errors.append({"row": line_no, "field": "(row)", "message": exc.detail or exc.title})
+                errors.append({"row": first_line, "field": "(row)", "message": exc.detail or exc.title})
             except (IntegrityError, DjangoValidationError) as exc:
-                errors.append({"row": line_no, "field": "(row)", "message": _db_message(exc)})
+                errors.append({"row": first_line, "field": "(row)", "message": _db_message(exc)})
         if errors:
             transaction.set_rollback(True)
             raise Problem(422, "CSV rows rejected", f"{len(errors)} row(s) failed; nothing was imported.", errors)
@@ -103,7 +132,7 @@ def run[Row: BaseModel](
             linked_type=linked_type,
             linked_id=linked_id,
         )
-    return ImportResult(created=len(rows), document_id=str(doc.id))
+    return ImportResult(created=len(created), document_id=str(doc.id)), created
 
 
 def _db_message(exc: Exception) -> str:
