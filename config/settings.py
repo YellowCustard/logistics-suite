@@ -132,6 +132,9 @@ X_FRAME_OPTIONS = "DENY"
 API_TOKEN_TTL_SECONDS = int(env("API_TOKEN_TTL_SECONDS", "3600"))
 IDEMPOTENCY_TTL_HOURS = int(env("IDEMPOTENCY_TTL_HOURS", "48"))
 OUTBOX_MAX_ATTEMPTS = int(env("OUTBOX_MAX_ATTEMPTS", "8"))
+# A stock correction larger than this share of the system quantity (or any correction of a zero balance)
+# needs site manager approval when it comes from a count, and opens an exception case when made directly.
+INVENTORY_VARIANCE_APPROVAL_PCT = float(env("INVENTORY_VARIANCE_APPROVAL_PCT", "2"))
 # Endpoints that authenticate or deduplicate differently (token grant, vendor webhooks, offline sync).
 IDEMPOTENCY_EXEMPT_PREFIXES = ["/api/v1/auth/", "/api/v1/integrations/", "/api/v1/sync/"]
 

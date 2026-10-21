@@ -73,6 +73,8 @@ CI (`.github/workflows/ci.yml`) runs all of the above plus `check --deploy` and 
 | Idempotency cleanup | Schedule `manage.py purge_idempotency` daily (cron or a scheduled container run). |
 | Encryption key rotation | Generate a key, put it **first** in `FIELD_ENCRYPTION_KEYS`, keep the old ones after it, deploy. Old values still decrypt and are re-encrypted on their next save. Never drop a key while rows may still use it. |
 | Inventory reconciliation | Schedule `manage.py reconcile_inventory` nightly. It compares every balance with its movement ledger and opens a critical `inventory.ledger_drift` case on any difference. |
+| Cycle counts | A supervisor opens a count on a set of bins (`POST /cycle-counts`). Operators scan what they find; they see only their own lines, never system quantities. Uncounted stock in those bins counts as zero on submit. Variances within `INVENTORY_VARIANCE_APPROVAL_PCT` (default 2%) post at once; anything larger, or any stock found in an empty bin, waits for a site manager who neither counted nor submitted it. |
+| Stock corrections | `POST /inventory/adjustments` (supervisors, reason required) posts immediately. A correction over the same threshold opens an `inventory.adjustment_review` case so a site manager reviews it after the fact. Every adjustment emits `wms.inventory.adjusted`. |
 | Receipt variances | Over, short or unexpected receipt lines open a `receipt.variance` case with the line-by-line detail. |
 | Audit log | Append-only, enforced by a database trigger. Read it in the admin under Audit entries. |
 | Rate cards | Published cards and their lines are immutable (database triggers). Changes mean a new version; publishing an open-ended newer version closes the older one the day before. |
@@ -100,3 +102,9 @@ CI (`.github/workflows/ci.yml`) runs all of the above plus `check --deploy` and 
 - Clients may send ASNs to any active warehouse; client-to-site assignment arrives with the portal.
 - Putaway suggestions count open tasks as occupied, but two receipts completing at the same instant can be
   offered the same empty bin. The operator then scans another bin with a reason.
+- Direct stock corrections post immediately and are reviewed afterwards (a case, not a block), because a picker
+  waiting on a manager stalls the floor. Count variances above the threshold are blocked until approved.
+- Added `POST /cycle-counts/{id}/reject` (with a note) alongside approve; a rejected count frees its bins for a recount.
+- `wms.inventory.adjusted` also carries `qty_before`, so consumers can judge the size of a correction without a lookup.
+- A count line records the system quantity when it is counted, so stock moved in or out of the bin before
+  submission doesn't show up as a variance. Bins in an open count are not frozen.
