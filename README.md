@@ -1,8 +1,9 @@
 # Logistics suite
 
 Contract warehousing, transport and billing for a South African 3PL. A Django modular monolith on one
-PostgreSQL database. This repository currently holds **M0 (Foundation)** of the Phase 1 Delivery
-Specification: platform services, master data, and warehouse locations.
+PostgreSQL database, built milestone by milestone from the Phase 1 Delivery Specification. Done so far:
+M0 (platform services, master data, bins) and the first part of M1 (ASNs, receiving, inventory ledger,
+putaway).
 
 ## Layout
 
@@ -10,13 +11,14 @@ Specification: platform services, master data, and warehouse locations.
 |---|---|
 | `apps/platform` | Bottom layer: users and roles, principals and scoping, API tokens, audit log, transactional outbox, idempotency, documents, exception queue, business numbers, CSV import engine |
 | `apps/masterdata` | Clients and other parties, sites, items (UoMs, barcodes), vehicles, drivers, contracts, versioned rate cards |
-| `apps/wms` | Warehouse locations (bins). Receiving, putaway, picking arrive in M1–M2 |
+| `apps/oms` | Inbound notices (ASNs and returns). Outbound orders arrive in M2 |
+| `apps/wms` | Bins, receiving, the inventory ledger (`ledger.py`, the only code that changes stock), putaway. Picking arrives in M2 |
 | `config` | Settings (environment-driven), URLs, API root |
 | `tests` | pytest suite against real PostgreSQL, including the M0 exit test |
 
 Module boundaries are enforced by import-linter (`pyproject.toml`): `platform` imports no business module,
-`masterdata` imports no other business module, and `wms` reaches master data only through its models and
-`services`.
+`masterdata` imports no other business module, `oms` never imports `wms`, and `wms` reaches `oms` only through
+`oms.services`. Business modules reach master data only through its models and `services`.
 
 ## Run locally
 
@@ -70,6 +72,8 @@ CI (`.github/workflows/ci.yml`) runs all of the above plus `check --deploy` and 
 | Outbox lag | `GET /api/v1/readyz` reports `outbox_lag_seconds`; alert above 300. |
 | Idempotency cleanup | Schedule `manage.py purge_idempotency` daily (cron or a scheduled container run). |
 | Encryption key rotation | Generate a key, put it **first** in `FIELD_ENCRYPTION_KEYS`, keep the old ones after it, deploy. Old values still decrypt and are re-encrypted on their next save. Never drop a key while rows may still use it. |
+| Inventory reconciliation | Schedule `manage.py reconcile_inventory` nightly. It compares every balance with its movement ledger and opens a critical `inventory.ledger_drift` case on any difference. |
+| Receipt variances | Over, short or unexpected receipt lines open a `receipt.variance` case with the line-by-line detail. |
 | Audit log | Append-only, enforced by a database trigger. Read it in the admin under Audit entries. |
 | Rate cards | Published cards and their lines are immutable (database triggers). Changes mean a new version; publishing an open-ended newer version closes the older one the day before. |
 | Backups | Take daily `pg_dump` (or managed-database snapshots) **and** back up the media volume; documents are evidence and are referenced by key from the database. |
@@ -84,3 +88,15 @@ CI (`.github/workflows/ci.yml`) runs all of the above plus `check --deploy` and 
 - The outbox relay is a management command; a job queue (Procrastinate) arrives with the first scheduled
   job in M1.
 - mypy is not yet in CI.
+
+## Deliberate deviations and assumptions (M1)
+
+- WMS reads an ASN through `oms.services` when the dock opens a receipt, instead of materialising an
+  "expected receipt" from `oms.inbound_notice.accepted`. The inbound notice list (`GET /inbound-notices?status=accepted`)
+  is the dock plan.
+- Added event `oms.inbound_notice.cancelled` (not in the spec's catalog) for portal webhooks later.
+- One receipt per ASN. A split delivery arrives as a second ASN.
+- One scanned receipt line is one pallet; `wms.receipt.completed` reports `pallets: 1` per line for handling-in charges.
+- Clients may send ASNs to any active warehouse; client-to-site assignment arrives with the portal.
+- Putaway suggestions count open tasks as occupied, but two receipts completing at the same instant can be
+  offered the same empty bin. The operator then scans another bin with a reason.
