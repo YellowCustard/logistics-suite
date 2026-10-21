@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     "apps.masterdata",
     "apps.oms",
     "apps.wms",
+    "apps.scanner",
 ]
 
 MIDDLEWARE = [
@@ -121,6 +122,9 @@ CSRF_COOKIE_SECURE = not DEBUG
 # Trust X-Forwarded-Proto only behind a proxy that sets it and strips client-supplied copies.
 if env_bool("DJANGO_BEHIND_TLS_PROXY", False):
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    NINJA_NUM_PROXIES = 1  # rate limits key on the client address Caddy puts last in X-Forwarded-For
+else:
+    NINJA_NUM_PROXIES = 0  # ignore X-Forwarded-For entirely; anyone could forge it
 SECURE_SSL_REDIRECT = env_bool("DJANGO_SECURE_SSL_REDIRECT", not DEBUG)
 SECURE_REDIRECT_EXEMPT = [r"^api/v1/(healthz|readyz)$"]  # load balancer probes arrive over plain HTTP
 # Start short; raise to 31536000 once every subdomain is known to serve HTTPS.
@@ -132,6 +136,13 @@ X_FRAME_OPTIONS = "DENY"
 API_TOKEN_TTL_SECONDS = int(env("API_TOKEN_TTL_SECONDS", "3600"))
 IDEMPOTENCY_TTL_HOURS = int(env("IDEMPOTENCY_TTL_HOURS", "48"))
 OUTBOX_MAX_ATTEMPTS = int(env("OUTBOX_MAX_ATTEMPTS", "8"))
+# A stock correction larger than this share of the system quantity (or any correction of a zero balance)
+# needs site manager approval when it comes from a count, and opens an exception case when made directly.
+LOGIN_RATE_LIMIT = env("LOGIN_RATE_LIMIT", "10/m")
+# Incremental scanner pulls re-read this far behind the cursor, so a row committed late by a slow transaction
+# is not missed. Devices upsert by id, so overlap costs only bandwidth.
+SYNC_PULL_OVERLAP_SECONDS = int(env("SYNC_PULL_OVERLAP_SECONDS", "300"))
+INVENTORY_VARIANCE_APPROVAL_PCT = float(env("INVENTORY_VARIANCE_APPROVAL_PCT", "2"))
 # Endpoints that authenticate or deduplicate differently (token grant, vendor webhooks, offline sync).
 IDEMPOTENCY_EXEMPT_PREFIXES = ["/api/v1/auth/", "/api/v1/integrations/", "/api/v1/sync/"]
 

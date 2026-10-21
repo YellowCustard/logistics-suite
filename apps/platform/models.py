@@ -236,6 +236,31 @@ class IdempotencyRecord(models.Model):
         return f"{self.scope}:{self.key}"
 
 
+class SyncStatus(models.TextChoices):
+    APPLIED = "applied"
+    REJECTED = "rejected"
+
+
+class SyncCommand(models.Model):
+    """One offline command from a scanner, recorded once under its device-generated id (see sync.py)."""
+
+    id = models.UUIDField(primary_key=True, help_text="command_id generated on the device")
+    type = models.CharField(max_length=60)
+    actor = models.CharField(max_length=80, help_text="principal that sent it, e.g. user:<id>")
+    device_id = models.CharField(max_length=64)
+    status = models.CharField(max_length=10, choices=SyncStatus.choices)
+    result = models.JSONField(null=True, blank=True)
+    problem = models.JSONField(null=True, blank=True)
+    recorded_at = models.DateTimeField(null=True, blank=True, help_text="device clock when the operator acted")
+    received_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["actor", "received_at"], name="sync_command_actor_idx")]
+
+    def __str__(self) -> str:
+        return f"{self.type} {self.id} ({self.status})"
+
+
 # --- Documents (evidence) ----------------------------------------------------------------------------
 
 

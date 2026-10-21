@@ -1,5 +1,9 @@
-"""Warehouse module: bins, receiving, putaway, and the inventory ledger."""
+"""Warehouse module: bins, receiving, putaway, counts, and the inventory ledger."""
 
+from decimal import Decimal
+
+from django.contrib.postgres.fields import ArrayField
+from django.contrib.postgres.indexes import GinIndex
 from django.db import models
 from django.db.models import Q
 
@@ -8,6 +12,7 @@ from apps.platform.ids import uuid7
 from apps.platform.models import Audited, BaseModel
 
 QTY = {"max_digits": 14, "decimal_places": 3}
+QTY_STEP = Decimal("0.001")  # matches QTY decimal_places
 
 
 class LocationKind(models.TextChoices):
@@ -222,3 +227,70 @@ class PutawayTask(Audited, BaseModel):
 
     def __str__(self) -> str:
         return f"Putaway {self.receipt_line_id}"
+
+
+# --- Cycle counts ---------------------------------------------------------------------------------------------
+
+
+class CountStatus(models.TextChoices):
+    OPEN = "open"
+    AWAITING_APPROVAL = "awaiting_approval"
+    POSTED = "posted"
+    REJECTED = "rejected"
+
+
+class CycleCount(Audited, BaseModel):
+    """A blind count of a set of bins. Counters never see system quantities."""
+
+    site = models.ForeignKey(Site, on_delete=models.PROTECT, related_name="+")
+    number = models.CharField(max_length=20, unique=True)
+    locations = models.ManyToManyField(Location, related_name="+")
+    status = models.CharField(max_length=20, choices=CountStatus.choices, default=CountStatus.OPEN)
+    created_by = models.UUIDField(null=True, blank=True)
+    submitted_by = models.UUIDField(null=True, blank=True)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    decided_by = models.UUIDField(null=True, blank=True)
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_note = models.TextField(blank=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["site", "status"], name="cycle_count_site_status_idx")]
+
+    def __str__(self) -> str:
+        return self.number
+
+
+class CycleCountLine(Audited, BaseModel):
+    """What was found in one bin for one stock key. `system_qty` is the on-hand quantity when the line was
+    counted, so stock that moves later does not distort the variance; the adjustment posts the variance."""
+
+    count = models.ForeignKey(CycleCount, on_delete=models.CASCADE, related_name="lines")
+    location = models.ForeignKey(Location, on_delete=models.PROTECT, related_name="+")
+    client = models.ForeignKey(Party, on_delete=models.PROTECT, related_name="+")
+    item = models.ForeignKey(Item, on_delete=models.PROTECT, related_name="+")
+    lot = models.CharField(max_length=40, blank=True)
+    expiry = models.DateField(null=True, blank=True)
+    stock_status = models.CharField(max_length=12, choices=StockStatus.choices, default=StockStatus.AVAILABLE)
+    counted_qty = models.DecimalField(**QTY, help_text="Base units")
+    system_qty = models.DecimalField(**QTY, help_text="Base units on hand when counted")
+    counted_by = models.UUIDField(null=True, blank=True, help_text="Null for bins confirmed empty at submit")
+    # Every offline command that has touched this line, so a late retry is a no-op rather than an overwrite.
+    command_ids = ArrayField(models.UUIDField(), default=list, blank=True)
+
+    class Meta:
+        indexes = [GinIndex(fields=["command_ids"], name="wms_countline_commands")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["count", "location", "client", "item", "lot", "expiry", "stock_status"],
+                nulls_distinct=False,
+                name="cycle_count_line_key_uq",
+            ),
+            models.CheckConstraint(condition=Q(counted_qty__gte=0), name="cycle_count_line_non_negative"),
+        ]
+
+    @property
+    def variance(self):
+        return self.counted_qty - self.system_qty
+
+    def __str__(self) -> str:
+        return f"{self.count.number} {self.location_id} {self.item_id}"

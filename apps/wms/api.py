@@ -1,29 +1,36 @@
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Annotated
 
-from django.db.models import F, QuerySet
+from django.conf import settings
+from django.db.models import F, Q, QuerySet
+from django.http import JsonResponse
+from django.utils import timezone
 from ninja import File, Router, Schema, Status
 from ninja.files import UploadedFile
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
-from apps.masterdata.models import Site
+from apps.masterdata import services as masterdata
+from apps.masterdata.models import Item, Site
 from apps.oms import services as oms
 from apps.platform import csvimport
 from apps.platform.apiutils import Problem, get_scoped, paginate, principal_of, require_roles, require_staff
 from apps.platform.auth import Principal
 from apps.platform.models import Role
 
-from . import putaway, receiving
+from . import adjustments, counting, putaway, receiving
 from .models import (
     Condition,
+    CountStatus,
+    CycleCount,
     InventoryBalance,
     Location,
     LocationKind,
     PutawayTask,
     Receipt,
     ReceiptStatus,
+    StockStatus,
     TaskStatus,
 )
 
@@ -351,3 +358,397 @@ def list_inventory(
         qs = qs.filter(lot=lot)
     items, next_cursor = paginate(qs, cursor, limit, max_limit=500)
     return {"items": items, "next_cursor": next_cursor}
+
+
+# --- Corrections and moves ---------------------------------------------------------------------------------------
+
+SUPERVISORS = (Role.WAREHOUSE_SUPERVISOR, Role.SITE_MANAGER)
+
+
+class StockRefIn(Schema):
+    site_id: uuid.UUID
+    location_code: str
+    client_id: uuid.UUID | None = Field(None, description="Needed when the SKU or barcode exists for several clients")
+    sku: str | None = None
+    barcode: str | None = None
+    uom: str = ""
+    lot: str = ""
+    expiry: date | None = None
+    status: StockStatus = StockStatus.AVAILABLE
+    command_id: uuid.UUID | None = None
+
+
+class AdjustmentIn(StockRefIn):
+    qty_delta: Annotated[Decimal, Field(max_digits=14, decimal_places=3)]
+    reason: str
+
+
+class MoveIn(StockRefIn):
+    to_location_code: str
+    qty: Annotated[Decimal, Field(gt=0, max_digits=14, decimal_places=3)]
+    reason: str = ""
+
+
+class MovementOut(Schema):
+    id: uuid.UUID
+    kind: str
+    qty_delta: Decimal
+    balance_id: uuid.UUID
+    reason: str
+
+
+def _stock_ref(principal: Principal, body: StockRefIn, roles: tuple[str, ...]) -> tuple[adjustments.StockRef, object]:
+    require_staff(principal)
+    require_roles(principal, *roles)
+    if not principal.can_see_site(body.site_id):
+        raise Problem(404, "Not found", "Unknown site.")
+    item = adjustments.find_item(client_id=body.client_id, sku=body.sku, barcode=body.barcode)
+    if not principal.can_see_client(item.client_id):
+        raise Problem(422, "Unknown item", "No such item for your clients.")
+    ref = adjustments.StockRef(
+        site_id=body.site_id,
+        location_code=body.location_code,
+        client_id=item.client_id,
+        sku=item.sku,
+        lot=body.lot,
+        expiry=body.expiry,
+        status=body.status,
+    )
+    return ref, item
+
+
+@router.post("/inventory/adjustments", response={201: MovementOut})
+def adjust_stock(request, body: AdjustmentIn):
+    ref, item = _stock_ref(principal_of(request), body, SUPERVISORS)
+    if body.qty_delta == 0:
+        raise Problem(422, "Invalid quantity", "qty_delta must not be zero.")
+    sign = 1 if body.qty_delta > 0 else -1
+    base = masterdata.to_base_qty(item, abs(body.qty_delta), body.uom or item.base_uom) * sign
+    return Status(201, adjustments.adjust(ref, base, reason=body.reason, command_id=body.command_id))
+
+
+@router.post("/inventory/moves", response={201: MovementOut})
+def move_stock(request, body: MoveIn):
+    # Moves don't change quantities, so operators can make them; every move is a ledger entry with its author.
+    ref, item = _stock_ref(principal_of(request), body, OPERATORS)
+    base = masterdata.to_base_qty(item, body.qty, body.uom or item.base_uom)
+    movement = adjustments.move(ref, body.to_location_code, base, command_id=body.command_id, reason=body.reason)
+    return Status(201, movement)
+
+
+# --- Cycle counts ---------------------------------------------------------------------------------------------------
+
+
+class CycleCountIn(Schema):
+    site_id: uuid.UUID
+    location_codes: list[str] = Field(..., min_length=1, max_length=500)
+
+
+class CountLineIn(Schema):
+    location_code: str
+    client_id: uuid.UUID | None = None
+    sku: str | None = None
+    barcode: str | None = None
+    qty: Annotated[Decimal, Field(ge=0, max_digits=14, decimal_places=3)]
+    uom: str = ""
+    lot: str = ""
+    expiry: date | None = None
+    stock_status: StockStatus = StockStatus.AVAILABLE
+    command_id: uuid.UUID | None = None
+
+
+class BlindLineOut(Schema):
+    """What a counter sees: their own finding, never the system quantity."""
+
+    id: uuid.UUID
+    location_code: str
+    item_id: uuid.UUID
+    sku: str
+    lot: str
+    expiry: date | None
+    stock_status: str
+    counted_qty: Decimal
+
+    @staticmethod
+    def resolve_location_code(obj):
+        return obj.location.code
+
+    @staticmethod
+    def resolve_sku(obj):
+        return obj.item.sku
+
+
+class CountLineOut(BlindLineOut):
+    client_id: uuid.UUID
+    system_qty: Decimal
+    variance: Decimal
+    needs_approval: bool
+
+    @staticmethod
+    def resolve_needs_approval(obj):
+        return adjustments.needs_approval(obj.system_qty, obj.variance)
+
+
+class CountDecisionIn(Schema):
+    note: str = ""
+
+
+class _CountBase(Schema):
+    id: uuid.UUID
+    number: str
+    site_id: uuid.UUID
+    status: str
+    location_codes: list[str]
+    submitted_at: datetime | None
+    decided_at: datetime | None
+    decision_note: str
+
+    @staticmethod
+    def resolve_location_codes(obj: CycleCount):
+        return sorted(obj.locations.values_list("code", flat=True))
+
+
+class BlindCountOut(_CountBase):
+    lines: list[BlindLineOut]
+
+    @staticmethod
+    def resolve_lines(obj: CycleCount):
+        return list(obj.lines.select_related("location", "item").filter(counted_by=obj._viewer).order_by("created_at"))
+
+
+class CycleCountOut(_CountBase):
+    lines: list[CountLineOut]
+
+    @staticmethod
+    def resolve_lines(obj: CycleCount):
+        return list(obj.lines.select_related("location", "item").order_by("location__code", "created_at"))
+
+
+def _counts(principal: Principal) -> QuerySet:
+    require_staff(principal)
+    require_roles(principal, *OPERATORS)
+    return principal.scope(CycleCount.objects.all(), client_field=None, site_field="site_id")
+
+
+def _count_view(principal: Principal, count: CycleCount) -> JsonResponse:
+    # Serialised here because Ninja can't validate an ORM object against a union of resolver-based schemas;
+    # the union in the route signature still documents both shapes.
+    if principal.has_role(*SUPERVISORS):
+        return JsonResponse(CycleCountOut.from_orm(count).model_dump(mode="json"))
+    count._viewer = principal.id
+    return JsonResponse(BlindCountOut.from_orm(count).model_dump(mode="json"))
+
+
+@router.post("/cycle-counts", response={201: CycleCountOut})
+def create_cycle_count(request, body: CycleCountIn):
+    principal = principal_of(request)
+    require_staff(principal)
+    require_roles(principal, *SUPERVISORS)
+    if not principal.can_see_site(body.site_id):
+        raise Problem(404, "Not found", "Unknown site.")
+    count = counting.create_count(site_id=body.site_id, location_codes=body.location_codes, created_by=principal.id)
+    return Status(201, count)
+
+
+class CycleCountPage(Schema):
+    items: list[_CountBase]
+    next_cursor: uuid.UUID | None
+
+
+@router.get("/cycle-counts", response=CycleCountPage)
+def list_cycle_counts(request, status: CountStatus | None = None, cursor: uuid.UUID | None = None, limit: int = 50):
+    qs = _counts(principal_of(request))
+    if status:
+        qs = qs.filter(status=status)
+    items, next_cursor = paginate(qs, cursor, limit)
+    return {"items": items, "next_cursor": next_cursor}
+
+
+@router.get("/cycle-counts/{count_id}", response=CycleCountOut | BlindCountOut)
+def get_cycle_count(request, count_id: uuid.UUID):
+    principal = principal_of(request)
+    return _count_view(principal, get_scoped(_counts(principal), count_id))
+
+
+@router.post("/cycle-counts/{count_id}/lines", response={201: BlindLineOut})
+def record_count_line(request, count_id: uuid.UUID, body: CountLineIn):
+    principal = principal_of(request)
+    count = get_scoped(_counts(principal), count_id)
+    item = adjustments.find_item(client_id=body.client_id, sku=body.sku, barcode=body.barcode)
+    if not principal.can_see_client(item.client_id):
+        raise Problem(422, "Unknown item", "No such item for your clients.")
+    data = body.dict() | {"client_id": item.client_id, "sku": item.sku, "barcode": None}
+    return Status(201, counting.record_line(count.pk, counted_by=principal.id, **data))
+
+
+@router.post("/cycle-counts/{count_id}/submit", response=CycleCountOut)
+def submit_cycle_count(request, count_id: uuid.UUID):
+    principal = principal_of(request)
+    require_roles(principal, *SUPERVISORS)
+    count = get_scoped(_counts(principal), count_id)
+    return counting.submit(count.pk, submitted_by=principal.id)
+
+
+@router.post("/cycle-counts/{count_id}/approve", response=CycleCountOut)
+def approve_cycle_count(request, count_id: uuid.UUID, body: CountDecisionIn):
+    principal = principal_of(request)
+    require_roles(principal, Role.SITE_MANAGER)
+    count = get_scoped(_counts(principal), count_id)
+    return counting.decide(count.pk, approve=True, decided_by=principal.id, note=body.note)
+
+
+@router.post("/cycle-counts/{count_id}/reject", response=CycleCountOut)
+def reject_cycle_count(request, count_id: uuid.UUID, body: CountDecisionIn):
+    principal = principal_of(request)
+    require_roles(principal, Role.SITE_MANAGER)
+    count = get_scoped(_counts(principal), count_id)
+    return counting.decide(count.pk, approve=False, decided_by=principal.id, note=body.note)
+
+
+# --- Scanner sync (pull) ----------------------------------------------------------------------------------------
+
+
+class PullUom(Schema):
+    uom: str
+    factor: int
+
+
+class PullBarcode(Schema):
+    barcode: str
+    uom: str
+
+
+class PullItem(Schema):
+    id: uuid.UUID
+    client_id: uuid.UUID
+    sku: str
+    description: str
+    base_uom: str
+    lot_tracked: bool
+    expiry_tracked: bool
+    is_active: bool
+    uoms: list[PullUom]
+    barcodes: list[PullBarcode]
+
+    @staticmethod
+    def resolve_uoms(obj: Item):
+        return list(obj.uoms.all())
+
+    @staticmethod
+    def resolve_barcodes(obj: Item):
+        return list(obj.barcodes.all())
+
+
+class PullLocation(Schema):
+    id: uuid.UUID
+    code: str
+    kind: str
+    is_active: bool
+
+
+class PullNoticeLine(Schema):
+    id: uuid.UUID
+    item_id: uuid.UUID
+    qty: Decimal
+    uom: str
+    lot: str
+    expiry: date | None
+
+
+class PullNotice(Schema):
+    id: uuid.UUID
+    number: str
+    client_id: uuid.UUID
+    client_ref: str
+    status: str
+    expected_at: datetime | None
+    lines: list[PullNoticeLine]
+
+
+class PullCount(Schema):
+    """Blind: bins only, never system quantities."""
+
+    id: uuid.UUID
+    number: str
+    status: str
+    location_codes: list[str]
+
+    @staticmethod
+    def resolve_location_codes(obj: CycleCount):
+        return sorted(location.code for location in obj.locations.all())
+
+
+class PullOut(Schema):
+    cursor: datetime = Field(description="Send back as `cursor` on the next pull")
+    full: bool
+    site_id: uuid.UUID
+    locations: list[PullLocation]
+    items: list[PullItem]
+    notices: list[PullNotice]
+    tasks: list[TaskOut]
+    counts: list[PullCount]
+
+
+@router.get("/sync/pull", response=PullOut)
+def sync_pull(request, site_id: uuid.UUID, cursor: datetime | None = None):
+    """Reference data and open work for one site. Without a cursor it is a full snapshot of what is active or
+    open; with one it returns everything changed since (closed and deactivated rows included, so devices
+    can drop them). Devices upsert by id. Hard-deleted pack sizes and barcodes only disappear on a full pull,
+    so devices do one at sign-in and daily."""
+    principal = principal_of(request)
+    require_roles(principal, *OPERATORS)
+    site = _site(principal, site_id)
+    next_cursor = timezone.now()
+    since = cursor - timedelta(seconds=settings.SYNC_PULL_OVERLAP_SECONDS) if cursor else None
+
+    locations = Location.objects.filter(site=site)
+    items = principal.scope(Item.objects.all(), client_field="client_id").prefetch_related("uoms", "barcodes")
+    tasks = _tasks(principal).filter(site_id=site.pk)
+    counts = CycleCount.objects.filter(site=site).prefetch_related("locations")
+    if since is None:
+        locations = locations.filter(is_active=True)
+        items = items.filter(is_active=True)
+        tasks = tasks.filter(status__in=[TaskStatus.OPEN, TaskStatus.CLAIMED])
+        counts = counts.filter(status=CountStatus.OPEN)
+    else:
+        locations = locations.filter(updated_at__gte=since)
+        items = items.filter(
+            Q(updated_at__gte=since) | Q(uoms__updated_at__gte=since) | Q(barcodes__updated_at__gte=since)
+        ).distinct()
+        tasks = tasks.filter(updated_at__gte=since)
+        counts = counts.filter(updated_at__gte=since)
+
+    notices = oms.dock_notices(
+        site.pk, client_ids=None if principal.all_clients else principal.client_ids, changed_since=since
+    )
+    return {
+        "cursor": next_cursor,
+        "full": since is None,
+        "site_id": site.pk,
+        "locations": list(locations.order_by("code")),
+        "items": list(items.order_by("client_id", "sku")),
+        "notices": [
+            {
+                "id": n.inbound_notice_id,
+                "number": n.number,
+                "client_id": n.client_id,
+                "client_ref": n.client_ref,
+                "status": n.status,
+                "expected_at": n.expected_at,
+                "lines": [
+                    {
+                        "id": ln.line_id,
+                        "item_id": ln.item_id,
+                        "qty": ln.qty,
+                        "uom": ln.uom,
+                        "lot": ln.lot,
+                        "expiry": ln.expiry,
+                    }
+                    for ln in n.lines
+                ],
+            }
+            for n in notices
+        ],
+        "tasks": list(tasks.order_by("created_at")),
+        "counts": list(counts.order_by("created_at")),
+    }

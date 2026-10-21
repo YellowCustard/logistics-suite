@@ -1,16 +1,21 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
+from django.conf import settings
+from django.contrib.auth import authenticate, login, logout
 from django.db import connection
 from django.http import FileResponse
 from django.utils import timezone
-from ninja import File, Form, Router, Schema, Status
+from ninja import Field, File, Form, Router, Schema, Status
 from ninja.files import UploadedFile
+from ninja.throttling import AnonRateThrottle
+from ninja.utils import check_csrf
 
-from . import documents, exceptions_queue
+from . import documents, exceptions_queue, sync
 from .apiutils import Problem, get_scoped, paginate, principal_of, require_roles, require_staff
-from .auth import issue_token
+from .auth import issue_token, principal_for_user
 from .models import Document, DocumentKind, ExceptionCase, OutboxEvent, Role
 
 auth_router = Router(tags=["auth"])
@@ -27,7 +32,11 @@ class TokenOut(Schema):
     expires_in: int
 
 
-@auth_router.post("/token", auth=None, response=TokenOut)
+# Per worker process (local-memory cache), so the effective limit is this times the worker count.
+LOGIN_THROTTLE = [AnonRateThrottle(settings.LOGIN_RATE_LIMIT)]
+
+
+@auth_router.post("/token", auth=None, response=TokenOut, throttle=LOGIN_THROTTLE)
 def token(request, grant_type: Form[str], client_id: Form[str], client_secret: Form[str]):
     if grant_type != "client_credentials":
         raise Problem(400, "unsupported_grant_type", "Only client_credentials is supported.")
@@ -36,6 +45,110 @@ def token(request, grant_type: Form[str], client_id: Form[str], client_secret: F
         raise Problem(401, "invalid_client", "Unknown client or wrong secret.")
     access_token, ttl = issued
     return TokenOut(access_token=access_token, expires_in=ttl)
+
+
+# --- Browser sessions (scanner PWA) ---------------------------------------------------------------------
+
+
+class LoginIn(Schema):
+    email: str = Field(..., max_length=254)
+    password: str = Field(..., max_length=256)
+
+
+class SessionOut(Schema):
+    user_id: uuid.UUID
+    email: str
+    roles: list[str]
+    all_sites: bool
+    site_ids: list[uuid.UUID]
+
+
+def _session_out(request) -> SessionOut:
+    principal = principal_of(request)
+    return SessionOut(
+        user_id=principal.id,
+        email=principal.label,
+        roles=sorted(principal.roles),
+        all_sites=principal.all_sites,
+        site_ids=sorted(principal.site_ids),
+    )
+
+
+@auth_router.post("/session", auth=None, response=SessionOut, throttle=LOGIN_THROTTLE)
+def create_session(request, body: LoginIn):
+    # Ninja skips CSRF on unauthenticated operations; check it here so another site can't log a device in.
+    if check_csrf(request) is not None:
+        raise Problem(403, "CSRF check failed", "Reload the page and sign in again.")
+    user = authenticate(request, username=body.email.strip(), password=body.password)
+    if user is None:
+        raise Problem(401, "Sign-in failed", "Wrong email or password.")
+    login(request, user)  # rotates the session key and the CSRF token
+    request.auth = principal_for_user(user)
+    if request.auth.is_client_scoped:
+        logout(request)
+        raise Problem(403, "Forbidden", "Client users sign in to the client portal, not the scanner.")
+    return _session_out(request)
+
+
+@auth_router.get("/session", response=SessionOut)
+def get_session(request):
+    return _session_out(request)
+
+
+@auth_router.delete("/session", response={204: None})
+def delete_session(request):
+    logout(request)
+    return Status(204, None)
+
+
+# --- Offline command sync ----------------------------------------------------------------------------------
+
+
+class SyncCommandIn(Schema):
+    command_id: uuid.UUID
+    type: str = Field(..., max_length=60)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    recorded_at: datetime | None = None
+
+
+class SyncPushIn(Schema):
+    device_id: str = Field(..., min_length=1, max_length=64)
+    commands: list[SyncCommandIn] = Field(..., max_length=100)
+
+
+class SyncOutcomeOut(Schema):
+    command_id: uuid.UUID
+    status: str
+    replayed: bool
+    result: dict[str, Any] | None
+    problem: dict[str, Any] | None
+
+
+class SyncPushOut(Schema):
+    results: list[SyncOutcomeOut]
+
+
+@platform_router.post("/sync/push", response=SyncPushOut)
+def sync_push(request, body: SyncPushIn):
+    """Apply queued scanner commands in order. Results come back in the same order; processing stops at the
+    first `retry` (later commands may depend on it), and the device resends everything without a result."""
+    principal = principal_of(request)
+    require_staff(principal)
+    results = []
+    for cmd in body.commands:
+        outcome = sync.apply(
+            request,
+            principal,
+            device_id=body.device_id,
+            command_id=cmd.command_id,
+            type_=cmd.type,
+            payload=cmd.payload,
+            recorded_at=cmd.recorded_at,
+        )
+        results.append(outcome)
+        if outcome.status == sync.RETRY:
+            break
+    return {"results": results}
 
 
 # --- Documents -------------------------------------------------------------------------------------------
