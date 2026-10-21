@@ -37,6 +37,8 @@ uv run python manage.py run_outbox       # second terminal: event delivery worke
 
 Or everything in containers: `cp .env.example .env`, fill in the secrets, then `docker compose up --build`.
 
+Staging and production run on a self-managed VPS: see [docs/staging.md](docs/staging.md).
+
 ## Checks
 
 ```bash
@@ -77,10 +79,11 @@ CI (`.github/workflows/ci.yml`) runs all of the above plus `check --deploy` and 
 | Stock corrections | `POST /inventory/adjustments` (supervisors, reason required) posts immediately. A correction over the same threshold opens an `inventory.adjustment_review` case so a site manager reviews it after the fact. Every adjustment emits `wms.inventory.adjusted`. Bin-to-bin moves (`POST /inventory/moves`) are open to operators because they don't change quantities. |
 | Scanner | Operators open `/scanner/` on the device and sign in with their user (session cookie plus CSRF; 10 attempts a minute per address and worker, `LOGIN_RATE_LIMIT`). Receiving, putaway, counting and moves work offline: actions queue on the device and send in order when it reconnects. Refused actions show under **Activity** with the reason and changed nothing. |
 | Scanner sync | `POST /api/v1/sync/push` applies queued commands once each; every command is kept in `platform_synccommand` with its device and outcome. `GET /api/v1/sync/pull?site_id=&cursor=` serves reference data and open work; incremental pulls overlap by `SYNC_PULL_OVERLAP_SECONDS` (300). |
+| ASN upload | `POST /api/v1/inbound-notices:import` takes a CSV (`client_ref, site_code, expected_at, sku` or `barcode`, `qty`, optional `uom, lot, expiry, kind, notes`). Rows sharing a `client_ref` become one ASN. One bad row rejects the whole file with row numbers; the file is kept as an import document. Staff add `?client_id=`. |
 | Receipt variances | Over, short or unexpected receipt lines open a `receipt.variance` case with the line-by-line detail. |
 | Audit log | Append-only, enforced by a database trigger. Read it in the admin under Audit entries. |
 | Rate cards | Published cards and their lines are immutable (database triggers). Changes mean a new version; publishing an open-ended newer version closes the older one the day before. |
-| Backups | Take daily `pg_dump` (or managed-database snapshots) **and** back up the media volume; documents are evidence and are referenced by key from the database. |
+| Backups | On the VPS, `deploy/ops.sh backup` runs nightly: a `pg_dump` plus the document volume, encrypted by restic and stored off-site. Rehearse `deploy/ops.sh restore-drill` monthly. See [docs/staging.md](docs/staging.md). |
 
 ## Deliberate deviations from the specification (M0)
 

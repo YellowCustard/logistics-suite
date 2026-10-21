@@ -64,3 +64,16 @@ jobs:
       - uses: actions/checkout@v5
       - name: Build container image
         run: docker build --tag logistics-suite:ci .
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.32"
+      - name: Deploy scripts
+        run: uvx --from shellcheck-py==0.11.0.1 shellcheck deploy/*.sh
+      - name: Staging compose overlay and Caddyfile are valid
+        run: |
+          printf 'POSTGRES_PASSWORD=ci\nDOMAIN=staging.example.com\nACME_EMAIL=ops@example.com\n' > .env
+          printf 'RESTIC_REPOSITORY=/tmp/repo\nRESTIC_PASSWORD=ci\n' > backup.env
+          docker compose -f compose.yaml -f deploy/compose.staging.yaml --profile ops config --quiet
+          docker run --rm -e DOMAIN=staging.example.com -e ACME_EMAIL=ops@example.com \
+            -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2.10.0 \
+            caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
