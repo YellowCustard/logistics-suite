@@ -1,0 +1,63 @@
+# Local and single-host deployment: Postgres (TimescaleDB + PostGIS image), API, outbox worker.
+# Usage: cp .env.example .env && docker compose up --build
+services:
+  db:
+    image: timescale/timescaledb-ha:pg17
+    environment:
+      POSTGRES_USER: logistics
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: logistics
+    volumes:
+      - pgdata:/home/postgres/pgdata
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U logistics -d logistics"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  migrate:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://logistics:${POSTGRES_PASSWORD}@db:5432/logistics
+    command: ["python", "manage.py", "migrate", "--noinput"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://logistics:${POSTGRES_PASSWORD}@db:5432/logistics
+    volumes:
+      - media:/app/media
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/readyz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  outbox:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://logistics:${POSTGRES_PASSWORD}@db:5432/logistics
+    command: ["python", "manage.py", "run_outbox"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    stop_signal: SIGTERM
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  media:

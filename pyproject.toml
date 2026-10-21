@@ -1,0 +1,67 @@
+[project]
+name = "logistics-suite"
+version = "0.1.0"
+description = "Contract warehousing, transport and billing suite (modular monolith)"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "django==5.2.18",
+    "django-ninja==1.7.1",
+    "psycopg[binary]==3.3.6",
+    "dj-database-url==3.1.2",
+    "cryptography==50.0.2",
+    "gunicorn==26.2.0",
+    "whitenoise==6.12.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+    "pytest-django==4.14.0",
+    "hypothesis==6.170.5",
+    "ruff==0.17.1",
+    "import-linter==2.15",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings_test"
+python_files = ["test_*.py"]
+addopts = "-ra --strict-markers --reuse-db"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "DJ", "RUF"]
+ignore = ["S101", "RUF012", "RUF001", "RUF002", "RUF003", "DJ001"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106"]
+"**/migrations/**" = ["E501", "RUF", "I"]
+
+[tool.importlinter]
+root_packages = ["apps"]
+include_external_packages = false
+
+[[tool.importlinter.contracts]]
+name = "Platform is the bottom layer and imports no business module"
+type = "forbidden"
+source_modules = ["apps.platform"]
+forbidden_modules = ["apps.masterdata", "apps.wms"]
+
+[[tool.importlinter.contracts]]
+name = "Master data depends only on platform"
+type = "forbidden"
+source_modules = ["apps.masterdata"]
+forbidden_modules = ["apps.wms"]
+
+[[tool.importlinter.contracts]]
+name = "Business modules reach master data only through its public services and models"
+type = "forbidden"
+source_modules = ["apps.wms"]
+forbidden_modules = ["apps.masterdata.api", "apps.masterdata.admin", "apps.masterdata.imports"]
