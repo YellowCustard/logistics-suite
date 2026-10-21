@@ -7,6 +7,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 
 from apps.masterdata import services as masterdata
 from apps.masterdata.models import Party, Site, SiteKind
@@ -150,6 +151,8 @@ class ExpectedNotice:
     site_id: uuid.UUID
     status: str
     lines: tuple[ExpectedLine, ...]
+    client_ref: str = ""
+    expected_at: datetime | None = None
 
 
 def _expected(notice: InboundNotice) -> ExpectedNotice:
@@ -165,7 +168,32 @@ def _expected(notice: InboundNotice) -> ExpectedNotice:
         )
         for line in notice.lines.select_related("item").filter(status=InboundLineStatus.OPEN).order_by("line_no")
     )
-    return ExpectedNotice(notice.pk, notice.number, notice.client_id, notice.site_id, notice.status, lines)
+    return ExpectedNotice(
+        notice.pk,
+        notice.number,
+        notice.client_id,
+        notice.site_id,
+        notice.status,
+        lines,
+        client_ref=notice.client_ref,
+        expected_at=notice.expected_at,
+    )
+
+
+def dock_notices(
+    site_id: uuid.UUID, *, client_ids: frozenset[uuid.UUID] | None, changed_since: datetime | None
+) -> list[ExpectedNotice]:
+    """The dock plan for scanners. A full read returns notices still to receive; an incremental one returns
+    every notice touched since `changed_since`, closed and cancelled included, so devices can drop them.
+    `client_ids=None` means every client."""
+    qs = InboundNotice.objects.filter(site_id=site_id)
+    if client_ids is not None:
+        qs = qs.filter(client_id__in=client_ids)
+    if changed_since is None:
+        qs = qs.filter(status__in=[InboundStatus.ACCEPTED, InboundStatus.RECEIVING])
+    else:
+        qs = qs.filter(Q(updated_at__gte=changed_since) | Q(lines__updated_at__gte=changed_since)).distinct()
+    return [_expected(notice) for notice in qs.order_by("expected_at", "id")]
 
 
 def expected_notice(notice_id: uuid.UUID) -> ExpectedNotice:

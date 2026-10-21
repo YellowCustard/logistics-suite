@@ -1,0 +1,10 @@
+{% load static %}{
+  "name": "Logistics Suite Scanner",
+  "short_name": "Scanner",
+  "start_url": "{% url 'scanner:index' %}",
+  "scope": "{% url 'scanner:index' %}",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1f3a5f",
+  "icons": [{"src": "{% static 'scanner/icon.svg' %}", "sizes": "any", "type": "image/svg+xml"}]
+}

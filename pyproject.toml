@@ -55,6 +55,12 @@ source_modules = ["apps.platform"]
 forbidden_modules = ["apps.masterdata", "apps.oms", "apps.wms"]
 
 [[tool.importlinter.contracts]]
+name = "The scanner shell holds no business logic; it talks to the API"
+type = "forbidden"
+source_modules = ["apps.scanner"]
+forbidden_modules = ["apps.masterdata", "apps.oms", "apps.wms"]
+
+[[tool.importlinter.contracts]]
 name = "Master data depends only on platform"
 type = "forbidden"
 source_modules = ["apps.masterdata"]

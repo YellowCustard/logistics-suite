@@ -1,16 +1,18 @@
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Annotated
 
-from django.db.models import F, QuerySet
+from django.conf import settings
+from django.db.models import F, Q, QuerySet
 from django.http import JsonResponse
+from django.utils import timezone
 from ninja import File, Router, Schema, Status
 from ninja.files import UploadedFile
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from apps.masterdata import services as masterdata
-from apps.masterdata.models import Site
+from apps.masterdata.models import Item, Site
 from apps.oms import services as oms
 from apps.platform import csvimport
 from apps.platform.apiutils import Problem, get_scoped, paginate, principal_of, require_roles, require_staff
@@ -601,3 +603,152 @@ def reject_cycle_count(request, count_id: uuid.UUID, body: CountDecisionIn):
     require_roles(principal, Role.SITE_MANAGER)
     count = get_scoped(_counts(principal), count_id)
     return counting.decide(count.pk, approve=False, decided_by=principal.id, note=body.note)
+
+
+# --- Scanner sync (pull) ----------------------------------------------------------------------------------------
+
+
+class PullUom(Schema):
+    uom: str
+    factor: int
+
+
+class PullBarcode(Schema):
+    barcode: str
+    uom: str
+
+
+class PullItem(Schema):
+    id: uuid.UUID
+    client_id: uuid.UUID
+    sku: str
+    description: str
+    base_uom: str
+    lot_tracked: bool
+    expiry_tracked: bool
+    is_active: bool
+    uoms: list[PullUom]
+    barcodes: list[PullBarcode]
+
+    @staticmethod
+    def resolve_uoms(obj: Item):
+        return list(obj.uoms.all())
+
+    @staticmethod
+    def resolve_barcodes(obj: Item):
+        return list(obj.barcodes.all())
+
+
+class PullLocation(Schema):
+    id: uuid.UUID
+    code: str
+    kind: str
+    is_active: bool
+
+
+class PullNoticeLine(Schema):
+    id: uuid.UUID
+    item_id: uuid.UUID
+    qty: Decimal
+    uom: str
+    lot: str
+    expiry: date | None
+
+
+class PullNotice(Schema):
+    id: uuid.UUID
+    number: str
+    client_id: uuid.UUID
+    client_ref: str
+    status: str
+    expected_at: datetime | None
+    lines: list[PullNoticeLine]
+
+
+class PullCount(Schema):
+    """Blind: bins only, never system quantities."""
+
+    id: uuid.UUID
+    number: str
+    status: str
+    location_codes: list[str]
+
+    @staticmethod
+    def resolve_location_codes(obj: CycleCount):
+        return sorted(location.code for location in obj.locations.all())
+
+
+class PullOut(Schema):
+    cursor: datetime = Field(description="Send back as `cursor` on the next pull")
+    full: bool
+    site_id: uuid.UUID
+    locations: list[PullLocation]
+    items: list[PullItem]
+    notices: list[PullNotice]
+    tasks: list[TaskOut]
+    counts: list[PullCount]
+
+
+@router.get("/sync/pull", response=PullOut)
+def sync_pull(request, site_id: uuid.UUID, cursor: datetime | None = None):
+    """Reference data and open work for one site. Without a cursor it is a full snapshot of what is active or
+    open; with one it returns everything changed since (closed and deactivated rows included, so devices
+    can drop them). Devices upsert by id. Hard-deleted pack sizes and barcodes only disappear on a full pull,
+    so devices do one at sign-in and daily."""
+    principal = principal_of(request)
+    require_roles(principal, *OPERATORS)
+    site = _site(principal, site_id)
+    next_cursor = timezone.now()
+    since = cursor - timedelta(seconds=settings.SYNC_PULL_OVERLAP_SECONDS) if cursor else None
+
+    locations = Location.objects.filter(site=site)
+    items = principal.scope(Item.objects.all(), client_field="client_id").prefetch_related("uoms", "barcodes")
+    tasks = _tasks(principal).filter(site_id=site.pk)
+    counts = CycleCount.objects.filter(site=site).prefetch_related("locations")
+    if since is None:
+        locations = locations.filter(is_active=True)
+        items = items.filter(is_active=True)
+        tasks = tasks.filter(status__in=[TaskStatus.OPEN, TaskStatus.CLAIMED])
+        counts = counts.filter(status=CountStatus.OPEN)
+    else:
+        locations = locations.filter(updated_at__gte=since)
+        items = items.filter(
+            Q(updated_at__gte=since) | Q(uoms__updated_at__gte=since) | Q(barcodes__updated_at__gte=since)
+        ).distinct()
+        tasks = tasks.filter(updated_at__gte=since)
+        counts = counts.filter(updated_at__gte=since)
+
+    notices = oms.dock_notices(
+        site.pk, client_ids=None if principal.all_clients else principal.client_ids, changed_since=since
+    )
+    return {
+        "cursor": next_cursor,
+        "full": since is None,
+        "site_id": site.pk,
+        "locations": list(locations.order_by("code")),
+        "items": list(items.order_by("client_id", "sku")),
+        "notices": [
+            {
+                "id": n.inbound_notice_id,
+                "number": n.number,
+                "client_id": n.client_id,
+                "client_ref": n.client_ref,
+                "status": n.status,
+                "expected_at": n.expected_at,
+                "lines": [
+                    {
+                        "id": ln.line_id,
+                        "item_id": ln.item_id,
+                        "qty": ln.qty,
+                        "uom": ln.uom,
+                        "lot": ln.lot,
+                        "expiry": ln.expiry,
+                    }
+                    for ln in n.lines
+                ],
+            }
+            for n in notices
+        ],
+        "tasks": list(tasks.order_by("created_at")),
+        "counts": list(counts.order_by("created_at")),
+    }
