@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# One-time setup of a fresh Ubuntu 24.04 VPS for staging (and later production). Run as root:
+# One-time setup of a fresh Ubuntu 24.04 VPS for staging (and later production). Run as root, or with
+# sudo from the image's default user (xneelo Cloud and most cloud images log in as `ubuntu`, not root):
 #
-#   scp deploy/bootstrap.sh root@<vps>:      (from a checkout; the repository is private)
-#   ssh root@<vps> bash bootstrap.sh
+#   scp deploy/bootstrap.sh ubuntu@<vps>:    (from a checkout; the repository is private)
+#   ssh ubuntu@<vps> sudo bash bootstrap.sh
 #
 # It is safe to re-run: every step checks before it changes anything. The first run stops after printing
 # a deploy key to add to GitHub (the repository is private); run it again once the key is added.
@@ -13,7 +14,7 @@ APP_DIR=/opt/logistics
 APP_USER=deploy
 DUMP_DIR=/var/lib/logistics/dump
 
-[[ $EUID -eq 0 ]] || { echo "run as root"; exit 1; }
+[[ $EUID -eq 0 ]] || { echo "run as root: sudo bash $0"; exit 1; }
 # shellcheck disable=SC1091  # provided by the OS
 . /etc/os-release
 [[ "$ID" == ubuntu && "$VERSION_ID" == 24.04 ]] || echo "warning: tested on Ubuntu 24.04 only (found $PRETTY_NAME)"
@@ -50,8 +51,16 @@ if ! id "$APP_USER" >/dev/null 2>&1; then
 fi
 usermod -aG docker "$APP_USER"
 install -d -m 700 -o "$APP_USER" -g "$APP_USER" "/home/$APP_USER/.ssh"
-if [[ -s /root/.ssh/authorized_keys && ! -s /home/$APP_USER/.ssh/authorized_keys ]]; then
-  install -m 600 -o "$APP_USER" -g "$APP_USER" /root/.ssh/authorized_keys "/home/$APP_USER/.ssh/authorized_keys"
+# Give deploy the keys of whoever is running this: the sudo user's on cloud images, else root's.
+KEY_SOURCE=/root/.ssh/authorized_keys
+if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != root ]]; then
+  KEY_SOURCE="$(getent passwd "$SUDO_USER" | cut -d: -f6)/.ssh/authorized_keys"
+fi
+if [[ -s "$KEY_SOURCE" && ! -s /home/$APP_USER/.ssh/authorized_keys ]]; then
+  # cloud-init prefixes root's keys with command="echo 'Please login as ...'"; copied as-is, that would lock
+  # deploy out. Keep only the key itself from each line.
+  { grep -oE '(ssh-(ed25519|rsa|dss)|ecdsa-sha2-nistp[0-9]+|sk-[a-z0-9@.-]+) [A-Za-z0-9+/=]+( .*)?$' "$KEY_SOURCE" || true; } \
+    | install -m 600 -o "$APP_USER" -g "$APP_USER" /dev/stdin "/home/$APP_USER/.ssh/authorized_keys"
 fi
 
 step "SSH: keys only, no root login (only when a key is installed, so you cannot lock yourself out)"
@@ -63,7 +72,7 @@ PermitRootLogin no
 SSH
   systemctl reload ssh
 else
-  echo "skipped: no authorized_keys for root or $APP_USER yet"
+  echo "skipped: no authorized_keys for $KEY_SOURCE or $APP_USER yet"
 fi
 
 step "Firewall: SSH, HTTP, HTTPS only"
