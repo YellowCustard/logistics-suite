@@ -83,7 +83,7 @@ CI (`.github/workflows/ci.yml`) runs all of the above plus `check --deploy` and 
 | Receipt variances | Over, short or unexpected receipt lines open a `receipt.variance` case with the line-by-line detail. |
 | Audit log | Append-only, enforced by a database trigger. Read it in the admin under Audit entries. |
 | Rate cards | Published cards and their lines are immutable (database triggers). Changes mean a new version; publishing an open-ended newer version closes the older one the day before. |
-| Backups | On the VPS, `deploy/ops.sh backup` runs nightly: a `pg_dump` plus the document volume, encrypted by restic and stored off-site. Rehearse `deploy/ops.sh restore-drill` monthly. See [docs/staging.md](docs/staging.md). |
+| Backups | On the VPS, `deploy/ops.sh backup` runs nightly: a `pg_dump` plus the document volume, encrypted by restic and kept on the server (staging) or off-site in S3 (required for production). Rehearse `deploy/ops.sh restore-drill` monthly. See [docs/staging.md](docs/staging.md). |
 
 ## Deliberate deviations from the specification (M0)
 
