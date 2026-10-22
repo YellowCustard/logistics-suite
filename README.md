@@ -37,7 +37,7 @@ uv run python manage.py run_outbox       # second terminal: event delivery worke
 
 Or everything in containers: `cp .env.example .env`, fill in the secrets, then `docker compose up --build`.
 
-Staging and production run on a self-managed VPS: see [docs/staging.md](docs/staging.md).
+Staging and production run on a self-managed xneelo Cloud instance: see [docs/staging.md](docs/staging.md).
 
 ## Checks
 
