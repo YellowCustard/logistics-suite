@@ -1,6 +1,6 @@
-# Staging on a self-managed VPS
+# Staging on xneelo Cloud
 
-Staging runs from M0 onward; production is created at M4 the same way. One VPS runs everything with
+Staging runs from M0 onward; production is created at M4 the same way. One xneelo Cloud instance runs everything with
 Docker Compose: Caddy (HTTPS), the API, the outbox worker and PostgreSQL (TimescaleDB + PostGIS image).
 Nightly encrypted backups go off the server with restic.
 
@@ -8,22 +8,60 @@ Nightly encrypted backups go off the server with restic.
 
 | Item | Notes |
 |---|---|
-| VPS | Ubuntu 24.04, 2 vCPU, 4 GB RAM, 80 GB SSD, hosted in South Africa (POPIA). Root SSH key access. |
-| DNS | An A record (e.g. `staging.<your domain>`) pointing at the VPS. Caddy gets the TLS certificate. |
-| Off-site backup storage | An S3-compatible bucket **not** on the VPS, preferably in South Africa (e.g. AWS S3 `af-south-1`), with an access key limited to that bucket. Offshore storage is a cross-border transfer under POPIA section 72. |
+| Server | An xneelo Cloud instance (see below): Ubuntu 24.04, 2 vCPU, 4 GB RAM, 80 GB NVMe, hosted in South Africa (POPIA). |
+| DNS | An A record (e.g. `staging.<your domain>`) pointing at the instance's public IPv4. Caddy gets the TLS certificate. |
+| Off-site backup storage | An S3 bucket **not** at xneelo, in South Africa: AWS S3 `af-south-1` (Cape Town), with an access key limited to that bucket. xneelo Cloud has no object storage, and backups on the same provider don't survive losing the account. Offshore storage is a cross-border transfer under POPIA section 72. |
 | GitHub | Admin access to add the server's read-only deploy key. |
+
+## Create the xneelo Cloud instance
+
+In the xneelo Cloud dashboard:
+
+1. **Network → Security Groups → Create Security Group** `logistics-web` with ingress rules TCP 22 (ideally
+   only from your own IP), TCP 80, TCP 443 and UDP 443 (HTTP/3). Leave egress open.
+2. **Compute → Instances → Launch Instance**:
+   - Flavor `s-g-2cpu-4gb` (about R198/month). Production at M4: `s-g-4cpu-8gb`.
+   - Boot source: the Ubuntu 24.04 image; boot volume **80 GB**, Premium (NVMe), about R144/month.
+     Set "Automatically delete this volume when the instance is deleted?" to **No**.
+   - Key pair: import your public key (`~/.ssh/id_ed25519.pub`). xneelo can't recover a lost private key.
+   - Network: **Public** (gives the instance a public IPv4 and IPv6).
+   - Security groups: add `logistics-web`.
+3. Note the public IPv4 under Compute → Instances and create the DNS A record.
+
+Instance snapshots are a useful extra before risky changes, but they are not the backup: restic to S3 is.
+
+## Create the backup bucket (AWS)
+
+1. In the AWS account, enable the **Africa (Cape Town) `af-south-1`** region (Account → AWS Regions; it is
+   opt-in), then create a private bucket there with versioning off and default encryption on.
+2. Create an IAM user for the server with only this policy, and an access key for it:
+
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {"Effect": "Allow", "Action": ["s3:ListBucket", "s3:GetBucketLocation"], "Resource": "arn:aws:s3:::<bucket>"},
+       {"Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"], "Resource": "arn:aws:s3:::<bucket>/*"}
+     ]
+   }
+   ```
+
+   `bootstrap.sh` asks for the repository (`s3:https://s3.af-south-1.amazonaws.com/<bucket>/logistics`) and
+   this key, and stores them in `backup.env` only.
 
 ## Set up
 
+xneelo's Ubuntu image logs in as `ubuntu` (not root), so the script runs with sudo:
+
 ```bash
-scp deploy/bootstrap.sh root@<vps>:   # from a checkout of this repository
-ssh root@<vps>
-bash bootstrap.sh                     # prints a deploy key: add it in GitHub > Settings > Deploy keys (read-only)
-bash bootstrap.sh                     # second run: asks for domain, email and backup bucket, then deploys
+scp deploy/bootstrap.sh ubuntu@<ip>:   # from a checkout of this repository
+ssh ubuntu@<ip>
+sudo bash bootstrap.sh                 # prints a deploy key: add it in GitHub > Settings > Deploy keys (read-only)
+sudo bash bootstrap.sh                 # second run: asks for domain, email and backup bucket, then deploys
 ```
 
 `bootstrap.sh` installs Docker from Docker's repository, turns on automatic security updates, fail2ban
-and a firewall (SSH, 80, 443 only), creates a `deploy` user, switches SSH to keys only, writes `.env` and
+and a firewall (SSH, 80, 443 only), creates a `deploy` user with your SSH key, switches SSH to keys only (no root login; `ubuntu` keeps working), writes `.env` and
 `backup.env` with generated secrets (mode 600), installs the nightly timers, and runs the first deploy.
 It is safe to re-run.
 
@@ -33,7 +71,7 @@ makes every backup unreadable.
 
 ## Operate
 
-All commands run on the server as `deploy` from `/opt/logistics`:
+All commands run on the server as `deploy` (`ssh deploy@<ip>`) from `/opt/logistics`:
 
 | Task | Command |
 |---|---|
