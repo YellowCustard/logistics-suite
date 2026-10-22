@@ -2,7 +2,7 @@
 # Day-to-day operations on the staging/production VPS. Run from the repository root as the deploy user.
 #
 #   deploy/ops.sh deploy                 pull main, rebuild, migrate, restart
-#   deploy/ops.sh backup                 dump Postgres, then push dump + documents to off-site restic repo
+#   deploy/ops.sh backup                 dump Postgres, then push dump + documents to the restic repo
 #   deploy/ops.sh snapshots              list backups
 #   deploy/ops.sh restore-drill [SNAP]   restore a backup into a scratch database, verify it, drop it
 #   deploy/ops.sh restore [SNAP]         DESTRUCTIVE: replace the live database and documents from a backup

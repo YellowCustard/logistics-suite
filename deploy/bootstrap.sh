@@ -13,6 +13,7 @@ REPO_SSH="git@github.com:YellowCustard/logistics-suite.git"
 APP_DIR=/opt/logistics
 APP_USER=deploy
 DUMP_DIR=/var/lib/logistics/dump
+LOCAL_REPO_DIR=/var/lib/logistics/restic  # backups when no off-site repository is given
 
 [[ $EUID -eq 0 ]] || { echo "run as root: sudo bash $0"; exit 1; }
 # shellcheck disable=SC1091  # provided by the OS
@@ -102,7 +103,7 @@ fi
 
 step "Application checkout"
 install -d -o "$APP_USER" -g "$APP_USER" "$APP_DIR"
-install -d -o "$APP_USER" -g "$APP_USER" -m 700 "$(dirname "$DUMP_DIR")" "$DUMP_DIR"
+install -d -o "$APP_USER" -g "$APP_USER" -m 700 "$(dirname "$DUMP_DIR")" "$DUMP_DIR" "$LOCAL_REPO_DIR"
 if [[ ! -d "$APP_DIR/.git" ]]; then
   sudo -u "$APP_USER" git clone --quiet "$REPO_SSH" "$APP_DIR"
 fi
@@ -112,9 +113,12 @@ ENV_FILE="$APP_DIR/.env"
 if [[ ! -f "$ENV_FILE" ]]; then
   read -r -p "Domain for this environment (DNS A record must point here), e.g. staging.example.co.za: " DOMAIN
   read -r -p "Email for Let's Encrypt notices: " ACME_EMAIL
-  read -r -p "Off-site restic repository, e.g. s3:https://s3.af-south-1.amazonaws.com/<bucket>/logistics: " RESTIC_REPOSITORY
-  read -r -p "Backup storage access key id: " BACKUP_ACCESS_KEY_ID
-  read -r -s -p "Backup storage secret key: " BACKUP_SECRET_ACCESS_KEY; echo
+  echo "Off-site restic repository, e.g. s3:https://s3.af-south-1.amazonaws.com/<bucket>/logistics"
+  read -r -p "(press Enter to keep backups on this server only): " RESTIC_REPOSITORY
+  if [[ -n "$RESTIC_REPOSITORY" ]]; then
+    read -r -p "Backup storage access key id: " BACKUP_ACCESS_KEY_ID
+    read -r -s -p "Backup storage secret key: " BACKUP_SECRET_ACCESS_KEY; echo
+  fi
   rand() { head -c 48 /dev/urandom | base64 | tr -d '/+=' | head -c "$1"; }
   fernet=$(head -c 32 /dev/urandom | base64 | tr '+/' '-_')
   umask 077
@@ -131,12 +135,22 @@ DJANGO_SECURE_HSTS_SECONDS=3600
 LOG_LEVEL=INFO
 BACKUP_DUMP_DIR=$DUMP_DIR
 ENV
-  cat >"$APP_DIR/backup.env" <<ENV
+  if [[ -n "$RESTIC_REPOSITORY" ]]; then
+    cat >"$APP_DIR/backup.env" <<ENV
 RESTIC_REPOSITORY=$RESTIC_REPOSITORY
 RESTIC_PASSWORD=$(rand 48)
 AWS_ACCESS_KEY_ID=$BACKUP_ACCESS_KEY_ID
 AWS_SECRET_ACCESS_KEY=$BACKUP_SECRET_ACCESS_KEY
 ENV
+  else
+    # /data/repo is $LOCAL_REPO_DIR on the host (deploy/compose.staging.yaml). To move off-site later, point
+    # RESTIC_REPOSITORY at a bucket, add the AWS_* keys, and run deploy/ops.sh backup.
+    cat >"$APP_DIR/backup.env" <<ENV
+RESTIC_REPOSITORY=/data/repo
+RESTIC_PASSWORD=$(rand 48)
+ENV
+    echo "warning: backups stay on this server; they will not survive losing the server or the account."
+  fi
   chown "$APP_USER:$APP_USER" "$ENV_FILE" "$APP_DIR/backup.env"
   echo
   echo "IMPORTANT: copy $ENV_FILE and $APP_DIR/backup.env to your password manager now. Without"
