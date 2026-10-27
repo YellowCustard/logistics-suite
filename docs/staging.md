@@ -84,6 +84,7 @@ All commands run on the server as `deploy` (`ssh deploy@<ip>`) from `/opt/logist
 |---|---|
 | Deploy the latest `main` | `deploy/ops.sh deploy` (discards local edits on the server; migrations run before the app starts) |
 | Create an admin login | `deploy/ops.sh createsuperuser` |
+| Load demo data (staging only) | `deploy/ops.sh manage seed_demo --not-production`: fictional clients KAL and BAO with stock at site DEMO-JHB, plus demo logins (printed once) |
 | Back up now | `deploy/ops.sh backup` (also runs nightly at 01:30 SAST) |
 | List backups | `deploy/ops.sh snapshots` |
 | Restore drill | `deploy/ops.sh restore-drill` restores the latest backup into a scratch database, checks it and drops it. Run monthly; Phase 1 exit criteria require a full restore within 4 hours. |
