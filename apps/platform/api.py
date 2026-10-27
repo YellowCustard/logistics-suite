@@ -13,10 +13,10 @@ from ninja.files import UploadedFile
 from ninja.throttling import AnonRateThrottle
 from ninja.utils import check_csrf
 
-from . import documents, exceptions_queue, sync
-from .apiutils import Problem, get_scoped, paginate, principal_of, require_roles, require_staff
+from . import documents, exceptions_queue, sync, webhooks
+from .apiutils import Problem, acting_client_id, get_scoped, paginate, principal_of, require_roles, require_staff
 from .auth import issue_token, principal_for_user
-from .models import Document, DocumentKind, ExceptionCase, OutboxEvent, Role
+from .models import Document, DocumentKind, ExceptionCase, OutboxEvent, Role, WebhookDelivery, WebhookSubscription
 
 auth_router = Router(tags=["auth"])
 platform_router = Router(tags=["platform"])
@@ -300,3 +300,120 @@ def readyz(request):
     )
     lag = (timezone.now() - oldest).total_seconds() if oldest else 0.0
     return Status(200, {"status": "ok", "database": "up", "outbox_lag_seconds": round(lag, 1)})
+
+
+# --- Webhooks ---------------------------------------------------------------------------------------------------
+
+WEBHOOK_ADMINS = (Role.CLIENT_ADMIN, "client_system")
+
+
+class WebhookIn(Schema):
+    url: str = Field(max_length=500)
+    event_types: list[str] = Field(min_length=1, max_length=len(webhooks.WEBHOOK_EVENTS))
+    description: str = Field("", max_length=200)
+    client_id: uuid.UUID | None = Field(
+        None, description="Staff only; client users and systems act for their own client"
+    )
+
+
+class WebhookOut(Schema):
+    id: uuid.UUID
+    client_id: uuid.UUID
+    url: str
+    event_types: list[str]
+    description: str
+    is_active: bool
+    created_at: datetime
+
+
+class WebhookCreatedOut(WebhookOut):
+    secret: str = Field(description="Signing secret. Shown once; store it now.")
+
+
+class WebhookDeliveryOut(Schema):
+    id: uuid.UUID
+    event_id: uuid.UUID
+    event_type: str
+    status: str
+    attempts: int
+    last_status_code: int | None
+    last_error: str
+    created_at: datetime
+    delivered_at: datetime | None
+
+    @staticmethod
+    def resolve_event_type(obj: WebhookDelivery):
+        return obj.event.type
+
+
+class WebhookEventsOut(Schema):
+    event_types: list[str]
+
+
+def _webhook_admin(principal) -> None:
+    if principal.is_client_scoped:
+        require_roles(principal, *WEBHOOK_ADMINS)
+    else:
+        require_roles(principal, Role.SYSTEM_ADMIN)
+
+
+def _subscriptions(principal):
+    _webhook_admin(principal)
+    return principal.scope(WebhookSubscription.objects.all())
+
+
+@platform_router.get("/webhooks/events", response=WebhookEventsOut)
+def webhook_events(request):
+    """Event types a webhook can subscribe to."""
+    principal_of(request)
+    return {"event_types": list(webhooks.WEBHOOK_EVENTS)}
+
+
+@platform_router.post("/webhooks", response={201: WebhookCreatedOut})
+def create_webhook(request, body: WebhookIn):
+    """Subscribe an HTTPS endpoint to events about one client. The response carries the signing secret once."""
+    principal = principal_of(request)
+    _webhook_admin(principal)
+    client_id = acting_client_id(principal, body.client_id, Role.SYSTEM_ADMIN)
+    subscription, secret = webhooks.create_subscription(
+        client_id=client_id,
+        url=body.url,
+        event_types=body.event_types,
+        description=body.description,
+        created_by=f"{principal.kind}:{principal.label}",
+    )
+    return Status(201, {**WebhookOut.from_orm(subscription).model_dump(), "secret": secret})
+
+
+@platform_router.get("/webhooks", response=list[WebhookOut])
+def list_webhooks(request, include_inactive: bool = False):
+    qs = _subscriptions(principal_of(request))
+    if not include_inactive:
+        qs = qs.filter(is_active=True)
+    return list(qs.order_by("created_at"))
+
+
+@platform_router.delete("/webhooks/{subscription_id}", response=WebhookOut)
+def disable_webhook(request, subscription_id: uuid.UUID):
+    """Stop sending. Deliveries still queued are dropped. Create a new subscription to start again."""
+    subscription = get_scoped(_subscriptions(principal_of(request)), subscription_id)
+    if subscription.is_active:
+        subscription.is_active = False
+        subscription.save()
+    return subscription
+
+
+@platform_router.post("/webhooks/{subscription_id}/ping", response={202: WebhookDeliveryOut})
+def ping_webhook(request, subscription_id: uuid.UUID):
+    """Queue a signed `platform.webhook.ping` delivery to check the endpoint and signature handling."""
+    subscription = get_scoped(_subscriptions(principal_of(request)), subscription_id)
+    if not subscription.is_active:
+        raise Problem(409, "Webhook disabled")
+    return Status(202, webhooks.ping(subscription))
+
+
+@platform_router.get("/webhooks/{subscription_id}/deliveries", response=list[WebhookDeliveryOut])
+def list_webhook_deliveries(request, subscription_id: uuid.UUID, limit: int = 50):
+    subscription = get_scoped(_subscriptions(principal_of(request)), subscription_id)
+    limit = max(1, min(limit, 200))
+    return list(subscription.deliveries.select_related("event").order_by("-created_at")[:limit])
