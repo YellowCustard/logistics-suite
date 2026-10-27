@@ -134,6 +134,9 @@ DJANGO_CSRF_TRUSTED_ORIGINS=https://$DOMAIN
 DJANGO_SECURE_HSTS_SECONDS=3600
 LOG_LEVEL=INFO
 BACKUP_DUMP_DIR=$DUMP_DIR
+# SSCC labels: replace with your GS1 South Africa company prefix. 0000000 is for testing only.
+GS1_COMPANY_PREFIX=0000000
+SSCC_EXTENSION_DIGIT=0
 ENV
   if [[ -n "$RESTIC_REPOSITORY" ]]; then
     cat >"$APP_DIR/backup.env" <<ENV

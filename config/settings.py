@@ -143,6 +143,10 @@ LOGIN_RATE_LIMIT = env("LOGIN_RATE_LIMIT", "10/m")
 # is not missed. Devices upsert by id, so overlap costs only bandwidth.
 SYNC_PULL_OVERLAP_SECONDS = int(env("SYNC_PULL_OVERLAP_SECONDS", "300"))
 INVENTORY_VARIANCE_APPROVAL_PCT = float(env("INVENTORY_VARIANCE_APPROVAL_PCT", "2"))
+# SSCCs on handling units: your GS1 company prefix (7-10 digits, from GS1 South Africa) and extension digit.
+# Without a prefix, packing refuses to open handling units. "0000000" is for local development only.
+GS1_COMPANY_PREFIX = env("GS1_COMPANY_PREFIX", "0000000" if DEBUG else "")
+SSCC_EXTENSION_DIGIT = env("SSCC_EXTENSION_DIGIT", "0")
 # Outbound webhooks to client systems. The two ALLOW flags exist for local testing only: never set them on a
 # server, because they let webhooks reach internal addresses.
 WEBHOOK_TIMEOUT_SECONDS = float(env("WEBHOOK_TIMEOUT_SECONDS", "10"))

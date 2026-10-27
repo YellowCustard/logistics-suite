@@ -480,10 +480,43 @@ class OrderSummary:
     client_id: uuid.UUID
     site_id: uuid.UUID
     status: str
+    ship_to_id: uuid.UUID
+    client_ref: str
 
 
 def order_summary(order_id: uuid.UUID) -> OrderSummary | None:
-    order = SalesOrder.objects.filter(pk=order_id).values("pk", "number", "client_id", "site_id", "status").first()
+    order = (
+        SalesOrder.objects.filter(pk=order_id)
+        .values("pk", "number", "client_id", "site_id", "status", "ship_to_id", "client_ref")
+        .first()
+    )
     if order is None:
         return None
-    return OrderSummary(order["pk"], order["number"], order["client_id"], order["site_id"], order["status"])
+    return OrderSummary(
+        order["pk"],
+        order["number"],
+        order["client_id"],
+        order["site_id"],
+        order["status"],
+        order["ship_to_id"],
+        order["client_ref"],
+    )
+
+
+@transaction.atomic
+def record_packed(order_id: uuid.UUID) -> SalesOrder | None:
+    """WMS reports that everything picked for the order is packed into closed handling units."""
+    order = SalesOrder.objects.select_for_update().filter(pk=order_id).first()
+    if order is None or order.status != OrderStatus.PICKING:
+        return order
+    order.status = OrderStatus.PACKED
+    order.save()
+    outbox.emit(
+        "oms.sales_order.packed",
+        aggregate_type="oms.sales_order",
+        aggregate_id=order.pk,
+        client_id=order.client_id,
+        site_id=order.site_id,
+        payload={"sales_order_id": str(order.pk), "number": order.number, "client_ref": order.client_ref},
+    )
+    return order

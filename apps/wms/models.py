@@ -445,3 +445,70 @@ class PickTask(Audited, BaseModel):
 
     def __str__(self) -> str:
         return f"Pick {self.qty} {self.item_id} from {self.from_location_id}"
+
+
+# --- Packing ------------------------------------------------------------------------------------------------------
+
+
+class HandlingUnitKind(models.TextChoices):
+    PALLET = "pallet"
+    CARTON = "carton"
+
+
+class HandlingUnitStatus(models.TextChoices):
+    OPEN = "open"
+    CLOSED = "closed"
+
+
+class HandlingUnit(Audited, BaseModel):
+    """A pallet or carton packed for one order, identified by its SSCC. Closed units are immutable (database
+    trigger), because the SSCC label is already on the goods."""
+
+    client = models.ForeignKey(Party, on_delete=models.PROTECT, related_name="+")
+    site = models.ForeignKey(Site, on_delete=models.PROTECT, related_name="+")
+    sales_order_id = models.UUIDField(help_text="oms.SalesOrder (cross-module id, no foreign key)")
+    order_number = models.CharField(max_length=30, help_text="Copied for labels and search")
+    sscc = models.CharField(max_length=18, unique=True)
+    kind = models.CharField(max_length=10, choices=HandlingUnitKind.choices)
+    status = models.CharField(max_length=10, choices=HandlingUnitStatus.choices, default=HandlingUnitStatus.OPEN)
+    weight_kg = models.DecimalField(max_digits=10, decimal_places=3, null=True, blank=True)
+    volume_m3 = models.DecimalField(max_digits=10, decimal_places=4, null=True, blank=True)
+    cartons = models.PositiveIntegerField(null=True, blank=True)
+    created_by = models.UUIDField(null=True, blank=True)
+    closed_at = models.DateTimeField(null=True, blank=True)
+    closed_by = models.UUIDField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=Q(sscc__regex=r"^[0-9]{18}$"), name="hu_sscc_18_digits"),
+            models.CheckConstraint(
+                condition=~Q(status="closed") | (Q(closed_at__isnull=False) & Q(weight_kg__gt=0) & Q(cartons__gt=0)),
+                name="hu_closed_is_complete",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["sales_order_id"], name="hu_order_idx"),
+            models.Index(fields=["site", "status"], name="hu_site_status_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return self.sscc
+
+
+class HandlingUnitContent(BaseModel):
+    handling_unit = models.ForeignKey(HandlingUnit, on_delete=models.PROTECT, related_name="contents")
+    order_line_id = models.UUIDField(help_text="oms.OrderLine (cross-module id, no foreign key)")
+    item = models.ForeignKey(Item, on_delete=models.PROTECT, related_name="+")
+    lot = models.CharField(max_length=40, blank=True)
+    expiry = models.DateField(null=True, blank=True)
+    qty = models.DecimalField(**QTY, help_text="Base units")
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=Q(qty__gt=0), name="hu_content_qty_positive"),
+            models.UniqueConstraint(fields=["handling_unit", "order_line_id", "lot"], name="hu_content_line_lot_uq"),
+        ]
+        indexes = [models.Index(fields=["order_line_id"], name="hu_content_line_idx")]
+
+    def __str__(self) -> str:
+        return f"{self.qty} {self.item_id} in {self.handling_unit_id}"

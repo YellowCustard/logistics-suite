@@ -164,7 +164,12 @@
       response = await fetch(API + path, {
         method,
         credentials: "same-origin",
-        headers: { "Content-Type": "application/json", Accept: "application/json", "X-CSRFToken": csrfToken() },
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "X-CSRFToken": csrfToken(),
+          ...(method === "GET" ? {} : { "Idempotency-Key": uuid4() }),
+        },
         body: body === undefined ? undefined : JSON.stringify(body),
       });
     } catch {
@@ -468,6 +473,7 @@
         h("a", { class: "tile", href: "#receive" }, "Receive"),
         h("a", { class: "tile", href: "#putaway" }, `Put away (${openTasks().length})`),
         h("a", { class: "tile", href: "#pick" }, `Pick (${openPicks().length})`),
+        h("a", { class: "tile", href: "#pack" }, "Pack"),
         h("a", { class: "tile", href: "#count" }, `Count (${state.ref.counts.size})`),
         h("a", { class: "tile", href: "#move" }, "Move"),
       ),
@@ -708,6 +714,164 @@
     );
   }
 
+  // Packing happens at a bench with a printer, so it works online only: every scan goes straight to the server,
+  // which hands out the SSCC and checks quantities against what was picked.
+  let packOrders = [];
+
+  async function loadPackOrders() {
+    const res = await api("GET", `/pack-orders?site_id=${state.siteId}`);
+    if (res.status !== 200) throw new Error((res.data && res.data.detail) || "Could not load orders to pack.");
+    packOrders = res.data;
+  }
+
+  function problem(res, fallback) {
+    return new Error(res.data && (res.data.detail || res.data.title) ? `${res.data.title || ""}${res.data.detail ? `: ${res.data.detail}` : ""}` : fallback);
+  }
+
+  function packOffline() {
+    show(h("h1", {}, "Pack"), h("p", { class: "flash bad" }, "Packing needs a connection."), h("div", { class: "actions" }, back()));
+  }
+
+  async function viewPackList() {
+    if (!state.online) return packOffline();
+    try {
+      await loadPackOrders();
+    } catch (error) {
+      if (error.offline) return packOffline();
+      say(error.message, "bad");
+    }
+    show(
+      h("h1", {}, "Pack"),
+      flash(),
+      h(
+        "ul",
+        { class: "list" },
+        packOrders.map((o) => {
+          const left = o.lines.reduce((sum, l) => sum + Number(l.remaining), 0);
+          return h("li", {}, h("a", { href: `#pack/${o.sales_order_id}` }, h("strong", {}, o.number), h("div", { class: "muted" }, `${left} to pack${o.picking_done ? "" : " · still picking"}`)));
+        }),
+      ),
+      packOrders.length ? null : h("p", { class: "muted" }, "Nothing waiting to be packed."),
+      h("div", { class: "actions" }, back()),
+    );
+  }
+
+  async function viewPackOrder(orderId, unitId) {
+    if (!state.online) return packOffline();
+    try {
+      await loadPackOrders();
+    } catch (error) {
+      if (error.offline) return packOffline();
+      say(error.message, "bad");
+    }
+    const order = packOrders.find((o) => o.sales_order_id === orderId);
+    if (!order) {
+      if (!state.flash) say("That order is packed or no longer waiting.");
+      location.hash = "#pack";
+      return;
+    }
+    const unit = order.open_units.find((u) => u.id === unitId) || (!unitId && order.open_units.length === 1 ? order.open_units[0] : null);
+    const lines = h(
+      "ul",
+      { class: "list" },
+      order.lines.map((l) => h("li", {}, `${l.sku}${l.lot ? ` · lot ${l.lot}` : ""}: ${Number(l.remaining)} of ${Number(l.picked)} left`)),
+    );
+    const start = (kind) =>
+      guarded(async () => {
+        const res = await api("POST", "/handling-units", { sales_order_id: orderId, kind });
+        if (res.status !== 201) throw problem(res, "Could not start a handling unit.");
+        say(`New ${kind} ${res.data.sscc}`);
+        location.hash = `#pack/${orderId}/${res.data.id}`;
+      });
+    if (!unit) {
+      return show(
+        h("h1", {}, `Pack ${order.number}`),
+        flash(),
+        lines,
+        order.open_units.length
+          ? [h("h2", {}, "Open units"), h("ul", { class: "list" }, order.open_units.map((u) => h("li", {}, h("a", { href: `#pack/${orderId}/${u.id}` }, `${u.kind} ${u.sscc} · ${u.contents.length} lines`))))]
+          : null,
+        h("div", { class: "actions" }, h("button", { onclick: start("carton") }, "New carton"), h("button", { class: "secondary", onclick: start("pallet") }, "New pallet"), back("#pack")),
+      );
+    }
+    const code = h("input", { autocomplete: "off", autocapitalize: "characters", placeholder: "Scan item barcode or SKU", autofocus: true });
+    const qty = h("input", { inputmode: "decimal", placeholder: "Quantity (units)", required: true });
+    const lot = h("input", { autocomplete: "off", placeholder: "Only if asked" });
+    const addForm = scanFlow(
+      h(
+        "form",
+        {
+          onsubmit: guarded(async () => {
+            if (!code.value.trim() || !(Number(qty.value) > 0)) throw new Error("Scan an item and enter a quantity.");
+            const res = await api("POST", `/handling-units/${unit.id}/contents`, { item_code: code.value.trim(), qty: qty.value.trim(), lot: lot.value.trim() });
+            if (res.status !== 201) throw problem(res, "Could not pack that.");
+            say(`Packed ${qty.value.trim()} × ${code.value.trim()}`);
+            route();
+          }),
+        },
+        field("Item", code),
+        field("Quantity", qty),
+        field("Lot", lot),
+        h("div", { class: "actions" }, h("button", { type: "submit" }, "Add")),
+      ),
+    );
+    const weight = h("input", { inputmode: "decimal", placeholder: "kg", required: true });
+    const cartons = h("input", { inputmode: "numeric", placeholder: unit.kind === "carton" ? "1" : "Cartons on the pallet" });
+    const closeForm = h(
+      "form",
+      {
+        onsubmit: guarded(async () => {
+          const body = { weight_kg: weight.value.trim() };
+          if (cartons.value.trim()) body.cartons = Number(cartons.value);
+          const res = await api("POST", `/handling-units/${unit.id}/close`, body);
+          if (res.status !== 200) throw problem(res, "Could not close the unit.");
+          window.open(`${API}/handling-units/${unit.id}/label`, "_blank", "noopener");
+          say(`Closed ${unit.sscc}. The label opened in a new tab.`);
+          location.hash = `#pack/${orderId}`;
+        }),
+      },
+      field("Weight (kg)", weight),
+      field("Cartons", cartons),
+      h("div", { class: "actions" }, h("button", { type: "submit" }, "Close and print label")),
+    );
+    show(
+      h("h1", {}, `${unit.kind} ${unit.sscc}`),
+      flash(),
+      h("p", { class: "muted" }, order.number),
+      h("h2", {}, "Left to pack"),
+      lines,
+      h("h2", {}, "Add"),
+      addForm,
+      h("h2", {}, `In this ${unit.kind}`),
+      h(
+        "ul",
+        { class: "list" },
+        unit.contents.map((c) =>
+          h(
+            "li",
+            {},
+            `${Number(c.qty)} × ${c.sku}${c.lot ? ` · lot ${c.lot}` : ""} `,
+            h(
+              "button",
+              {
+                class: "secondary",
+                onclick: guarded(async () => {
+                  const res = await api("DELETE", `/handling-units/${unit.id}/contents/${c.id}`);
+                  if (res.status !== 200) throw problem(res, "Could not remove that line.");
+                  say(`Removed ${c.sku}`);
+                  route();
+                }),
+              },
+              "Remove",
+            ),
+          ),
+        ),
+      ),
+      unit.contents.length ? [h("h2", {}, "Close"), closeForm] : null,
+      h("div", { class: "actions" }, back(`#pack/${orderId}`)),
+    );
+  }
+
   // Counting is blind: the device never has system quantities, only the bins to count.
   function viewCountList() {
     const counts = [...state.ref.counts.values()];
@@ -891,6 +1055,8 @@
         return id ? viewPutaway(id) : viewPutawayList();
       case "pick":
         return id ? viewPick(id) : viewPickList();
+      case "pack":
+        return id ? viewPackOrder(id, location.hash.split("/")[2]) : viewPackList();
       case "count":
         return id ? viewCount(id) : viewCountList();
       case "move":
