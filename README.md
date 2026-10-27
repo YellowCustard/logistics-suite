@@ -1,9 +1,9 @@
-# Logistics suite
+# Nuronteq
 
-Contract warehousing, transport and billing for a South African 3PL. A Django modular monolith on one
+Nuronteq: contract warehousing, transport and billing for a South African 3PL. A Django modular monolith on one
 PostgreSQL database, built milestone by milestone from the Phase 1 Delivery Specification. Done so far:
-M0 (platform services, master data, bins) and the first part of M1 (ASNs, receiving, inventory ledger,
-putaway).
+M0 (platform services, master data, bins) and M1 (ASNs, receiving, inventory ledger, putaway, cycle counts,
+the offline scanner PWA).
 
 ## Layout
 
