@@ -14,7 +14,7 @@ the offline scanner PWA) and the first part of M2 (sales orders, allocation, wav
 | `apps/oms` | Inbound notices (ASNs and returns) and outbound sales orders (API, CSV import, cancellation) |
 | `apps/wms` | Bins, receiving, the inventory ledger (`ledger.py`, the only code that changes stock), putaway, allocation (`allocation.py`, FEFO then FIFO), waves and picking (`picking.py`), packing into handling units with SSCC labels (`packing.py`, `sscc.py`, `labels.py`) |
 | `config` | Settings (environment-driven), URLs, API root |
-| `tests` | pytest suite against real PostgreSQL, including the M0 exit test |
+| `tests` | pytest suite against real PostgreSQL, including the M0 exit test (onboarding through CSV and the API) and the M2 exit test (`test_m2_exit.py`: a simulated week of 20 orders a day received, picked and packed through the API only) |
 
 Module boundaries are enforced by import-linter (`pyproject.toml`): `platform` imports no business module,
 `masterdata` imports no other business module, `oms` never imports `wms`, and `wms` reaches `oms` only through
