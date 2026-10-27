@@ -19,8 +19,9 @@ from apps.platform.apiutils import Problem, get_scoped, paginate, principal_of, 
 from apps.platform.auth import Principal
 from apps.platform.models import Role
 
-from . import adjustments, counting, putaway, receiving
+from . import adjustments, allocation, counting, putaway, receiving
 from .models import (
+    Allocation,
     Condition,
     CountStatus,
     CycleCount,
@@ -752,3 +753,88 @@ def sync_pull(request, site_id: uuid.UUID, cursor: datetime | None = None):
         "tasks": list(tasks.order_by("created_at")),
         "counts": list(counts.order_by("created_at")),
     }
+
+
+# --- Allocation ---------------------------------------------------------------------------------------------------
+
+
+class AllocationRunIn(Schema):
+    site_id: uuid.UUID
+    sales_order_ids: list[uuid.UUID] | None = Field(
+        None, max_length=500, description="Defaults to every backordered order at the site"
+    )
+
+
+class AllocationLineOut(Schema):
+    order_line_id: uuid.UUID
+    item_id: uuid.UUID
+    qty_requested: Decimal
+    qty_allocated: Decimal
+
+
+class AllocationResultOut(Schema):
+    sales_order_id: uuid.UUID
+    number: str
+    fully_allocated: bool
+    lines: list[AllocationLineOut]
+
+
+class AllocationOut(Schema):
+    id: uuid.UUID
+    sales_order_id: uuid.UUID
+    order_line_id: uuid.UUID
+    balance_id: uuid.UUID
+    location_code: str
+    lot: str
+    expiry: date | None
+    qty_allocated: Decimal
+    qty_picked: Decimal
+    status: str
+
+
+@router.post("/allocations:run", response=list[AllocationResultOut])
+def run_allocation(request, body: AllocationRunIn):
+    """Re-run allocation, e.g. after stock arrives: tops up backordered orders, oldest required-by first."""
+    principal = principal_of(request)
+    require_staff(principal)
+    require_roles(principal, *SUPERVISORS)
+    if not principal.can_see_site(body.site_id):
+        raise Problem(404, "Not found", "Unknown site.")
+    order_ids = body.sales_order_ids
+    if order_ids is not None:
+        # Only orders at this site for clients the caller can see; others are silently skipped (no id leaks).
+        order_ids = [
+            order_id
+            for order_id in order_ids
+            if (order := oms.order_summary(order_id)) is not None
+            and order.site_id == body.site_id
+            and principal.can_see_client(order.client_id)
+        ]
+    else:
+        order_ids = [
+            order_id
+            for order_id in oms.orders_to_allocate(body.site_id)
+            if principal.can_see_client(oms.order_summary(order_id).client_id)
+        ]
+    return [
+        {
+            "sales_order_id": result.sales_order_id,
+            "number": result.number,
+            "fully_allocated": result.fully_allocated,
+            "lines": result.lines,
+        }
+        for result in allocation.rerun(body.site_id, order_ids)
+    ]
+
+
+@router.get("/allocations", response=list[AllocationOut])
+def list_allocations(request, sales_order_id: uuid.UUID):
+    """Where an order's stock is reserved, bin by bin."""
+    principal = principal_of(request)
+    require_staff(principal)
+    qs = principal.scope(Allocation.objects.filter(sales_order_id=sales_order_id), site_field="site_id")
+    return list(
+        qs.annotate(
+            location_code=F("balance__location__code"), lot=F("balance__lot"), expiry=F("balance__expiry")
+        ).order_by("created_at", "id")
+    )

@@ -12,7 +12,7 @@ putaway).
 | `apps/platform` | Bottom layer: users and roles, principals and scoping, API tokens, audit log, transactional outbox, idempotency, documents, exception queue, business numbers, CSV import engine |
 | `apps/masterdata` | Clients and other parties, sites, items (UoMs, barcodes), vehicles, drivers, contracts, versioned rate cards |
 | `apps/oms` | Inbound notices (ASNs and returns) and outbound sales orders (API, CSV import, cancellation) |
-| `apps/wms` | Bins, receiving, the inventory ledger (`ledger.py`, the only code that changes stock), putaway. Picking arrives in M2 |
+| `apps/wms` | Bins, receiving, the inventory ledger (`ledger.py`, the only code that changes stock), putaway, allocation (`allocation.py`, FEFO then FIFO). Picking arrives next in M2 |
 | `config` | Settings (environment-driven), URLs, API root |
 | `tests` | pytest suite against real PostgreSQL, including the M0 exit test |
 
@@ -74,7 +74,8 @@ CI (`.github/workflows/ci.yml`) runs all of the above plus `check --deploy` and 
 | Outbox lag | `GET /api/v1/readyz` reports `outbox_lag_seconds`; alert above 300. |
 | Idempotency cleanup | Schedule `manage.py purge_idempotency` daily (cron or a scheduled container run). |
 | Encryption key rotation | Generate a key, put it **first** in `FIELD_ENCRYPTION_KEYS`, keep the old ones after it, deploy. Old values still decrypt and are re-encrypted on their next save. Never drop a key while rows may still use it. |
-| Inventory reconciliation | Schedule `manage.py reconcile_inventory` nightly. It compares every balance with its movement ledger and opens a critical `inventory.ledger_drift` case on any difference. |
+| Inventory reconciliation | Schedule `manage.py reconcile_inventory` nightly. It compares every balance with its movement ledger and opens a critical `inventory.ledger_drift` case on any difference, and checks each balance's allocated quantity against its open allocations (`inventory.allocation_drift`). |
+| Allocation | Every accepted order allocates at once: available stock in storage and pick-face bins only, earliest expiry first, then oldest arrival, then pick path. Expired, quarantined and dock stock is never allocated. A short order keeps what it got, becomes `backordered`, emits `wms.allocation.shorted` and opens one `allocation.short` case. After new stock is put away, a supervisor tops backorders up with `POST /allocations:run` (`site_id`, optional `sales_order_ids`); the case resolves when the order is full. Cancelling an order releases its reservations. |
 | Cycle counts | A supervisor opens a count on a set of bins (`POST /cycle-counts`). Operators scan what they find; they see only their own lines, never system quantities. Uncounted stock in those bins counts as zero on submit. Variances within `INVENTORY_VARIANCE_APPROVAL_PCT` (default 2%) post at once; anything larger, or any stock found in an empty bin, waits for a site manager who neither counted nor submitted it. |
 | Stock corrections | `POST /inventory/adjustments` (supervisors, reason required) posts immediately. A correction over the same threshold opens an `inventory.adjustment_review` case so a site manager reviews it after the fact. Every adjustment emits `wms.inventory.adjusted`. Bin-to-bin moves (`POST /inventory/moves`) are open to operators because they don't change quantities. |
 | Scanner | Operators open `/scanner/` on the device and sign in with their user (session cookie plus CSRF; 10 attempts a minute per address and worker, `LOGIN_RATE_LIMIT`). Receiving, putaway, counting and moves work offline: actions queue on the device and send in order when it reconnects. Refused actions show under **Activity** with the reason and changed nothing. |
@@ -122,3 +123,12 @@ CI (`.github/workflows/ci.yml`) runs all of the above plus `check --deploy` and 
   `Idempotency-Key`. A refused command is final; the operator scans again, which is a new command.
 - A device pushes only the signed-in user's commands, so a shared scanner never sends one person's work
   under another's name.
+
+## Deliberate deviations and assumptions (M2)
+
+- OMS doesn't check stock when it accepts an order (that would make OMS read WMS). Allocation runs from
+  `oms.sales_order.accepted`, and an order that can't be filled becomes `backordered` a moment later.
+- A short order keeps a partial allocation rather than holding nothing, so stock isn't taken by a later order.
+  Backorders are topped up by a supervisor run, not automatically on every putaway.
+- Allocation and cancellation lock the order row, so an order cancelled while allocating releases cleanly; a late
+  allocation result never changes a cancelled order.

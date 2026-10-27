@@ -394,3 +394,82 @@ def cancel_sales_order(order_id: uuid.UUID, reason: str) -> SalesOrder:
         payload={"sales_order_id": str(order.pk), "number": order.number, "reason": order.cancelled_reason},
     )
     return order
+
+
+# --- Allocation support for WMS -------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class OpenOrderLine:
+    line_id: uuid.UUID
+    line_no: int
+    item_id: uuid.UUID
+    base_qty: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class OrderToAllocate:
+    sales_order_id: uuid.UUID
+    number: str
+    client_id: uuid.UUID
+    site_id: uuid.UUID
+    status: str
+    lines: tuple[OpenOrderLine, ...]
+
+    @property
+    def allocatable(self) -> bool:
+        return self.status in (OrderStatus.ACCEPTED, OrderStatus.ALLOCATED, OrderStatus.BACKORDERED)
+
+
+def lock_order_for_allocation(order_id: uuid.UUID) -> OrderToAllocate | None:
+    """Called by WMS inside its allocation transaction. The row lock serialises allocation against
+    cancellation, so stock is never left reserved for an order that was cancelled meanwhile."""
+    if not transaction.get_connection().in_atomic_block:
+        raise RuntimeError("lock_order_for_allocation() must run inside the allocation transaction")
+    order = SalesOrder.objects.select_for_update().filter(pk=order_id).first()
+    if order is None:
+        return None
+    lines = tuple(
+        OpenOrderLine(line.pk, line.line_no, line.item_id, line.base_qty)
+        for line in order.lines.filter(status=OrderLineStatus.OPEN).order_by("line_no")
+    )
+    return OrderToAllocate(order.pk, order.number, order.client_id, order.site_id, order.status, lines)
+
+
+def orders_to_allocate(site_id: uuid.UUID, statuses: tuple[str, ...] = (OrderStatus.BACKORDERED,)) -> list[uuid.UUID]:
+    """Ids of a site's orders in `statuses`, oldest required-by first: the queue for an allocation re-run."""
+    return list(
+        SalesOrder.objects.filter(site_id=site_id, status__in=statuses)
+        .order_by("required_by", "created_at", "id")
+        .values_list("pk", flat=True)
+    )
+
+
+@transaction.atomic
+def record_allocation(order_id: uuid.UUID, *, fully_allocated: bool) -> SalesOrder | None:
+    """Apply an allocation result. Ignored once picking has started or the order was cancelled, because
+    allocation events can arrive after either."""
+    order = SalesOrder.objects.select_for_update().filter(pk=order_id).first()
+    if order is None or order.status not in (OrderStatus.ACCEPTED, OrderStatus.ALLOCATED, OrderStatus.BACKORDERED):
+        return order
+    status = OrderStatus.ALLOCATED if fully_allocated else OrderStatus.BACKORDERED
+    if order.status != status:
+        order.status = status
+        order.save()
+    return order
+
+
+@dataclass(frozen=True, slots=True)
+class OrderSummary:
+    sales_order_id: uuid.UUID
+    number: str
+    client_id: uuid.UUID
+    site_id: uuid.UUID
+    status: str
+
+
+def order_summary(order_id: uuid.UUID) -> OrderSummary | None:
+    order = SalesOrder.objects.filter(pk=order_id).values("pk", "number", "client_id", "site_id", "status").first()
+    if order is None:
+        return None
+    return OrderSummary(order["pk"], order["number"], order["client_id"], order["site_id"], order["status"])

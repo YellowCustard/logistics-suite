@@ -1,4 +1,5 @@
-"""The inventory ledger. `post()` is the only code that changes an InventoryBalance."""
+"""The inventory ledger. `post()` is the only code that changes on-hand stock; `reserve_available()` and
+`release()` are the only code that changes allocated stock."""
 
 import uuid
 from dataclasses import dataclass
@@ -85,6 +86,35 @@ def post(
         command_id=command_id,
         actor_id=current_actor().id,
     )
+
+
+def reserve_available(balance_id: uuid.UUID, up_to: Decimal) -> Decimal:
+    """Earmark up to `up_to` of a balance's available stock for an order and return how much was taken
+    (zero if another transaction got there first)."""
+    if not transaction.get_connection().in_atomic_block:
+        raise RuntimeError("ledger.reserve_available() must run inside transaction.atomic()")
+    if up_to <= 0:
+        raise ValueError("up_to must be positive")
+    balance = InventoryBalance.objects.select_for_update().get(pk=balance_id)
+    taken = min(up_to, balance.qty_on_hand - balance.qty_allocated)
+    if taken > 0:
+        balance.qty_allocated += taken
+        balance.save(update_fields=["qty_allocated", "updated_at"])
+    return max(taken, Decimal(0))
+
+
+def release(balance_id: uuid.UUID, qty: Decimal) -> InventoryBalance:
+    """Give back `qty` previously reserved on a balance."""
+    if not transaction.get_connection().in_atomic_block:
+        raise RuntimeError("ledger.release() must run inside transaction.atomic()")
+    if qty <= 0:
+        raise ValueError("qty must be positive")
+    balance = InventoryBalance.objects.select_for_update().get(pk=balance_id)
+    if balance.qty_allocated < qty:
+        raise ValueError(f"releasing {qty} but only {balance.qty_allocated} is allocated on {balance_id}")
+    balance.qty_allocated -= qty
+    balance.save(update_fields=["qty_allocated", "updated_at"])
+    return balance
 
 
 def transfer(

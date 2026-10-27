@@ -1,4 +1,4 @@
-"""Warehouse module: bins, receiving, putaway, counts, and the inventory ledger."""
+"""Warehouse module: bins, receiving, putaway, counts, allocation, and the inventory ledger."""
 
 from decimal import Decimal
 
@@ -294,3 +294,51 @@ class CycleCountLine(Audited, BaseModel):
 
     def __str__(self) -> str:
         return f"{self.count.number} {self.location_id} {self.item_id}"
+
+
+# --- Allocation ---------------------------------------------------------------------------------------------------
+
+
+class AllocationStatus(models.TextChoices):
+    RESERVED = "reserved"
+    RELEASED = "released", "Released to a pick wave"
+    PICKED = "picked"
+    SHORT = "short", "Shorted at the pick face"
+    CANCELLED = "cancelled"
+
+
+# Allocations that still hold (or held and consumed) stock for their order line.
+ACTIVE_ALLOCATION = (AllocationStatus.RESERVED, AllocationStatus.RELEASED, AllocationStatus.PICKED)
+
+
+class Allocation(Audited, BaseModel):
+    """Stock earmarked for one order line from one balance. The sum of open allocations on a balance equals
+    its qty_allocated (checked nightly by reconciliation)."""
+
+    client = models.ForeignKey(Party, on_delete=models.PROTECT, related_name="+")
+    site = models.ForeignKey(Site, on_delete=models.PROTECT, related_name="+")
+    sales_order_id = models.UUIDField(help_text="oms.SalesOrder (cross-module id, no foreign key)")
+    order_line_id = models.UUIDField(help_text="oms.OrderLine (cross-module id, no foreign key)")
+    balance = models.ForeignKey(InventoryBalance, on_delete=models.PROTECT, related_name="allocations")
+    qty_allocated = models.DecimalField(**QTY, help_text="Base units")
+    qty_picked = models.DecimalField(**QTY, default=0, help_text="Base units")
+    status = models.CharField(max_length=10, choices=AllocationStatus.choices, default=AllocationStatus.RESERVED)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=Q(qty_allocated__gt=0), name="allocation_qty_positive"),
+            models.CheckConstraint(
+                condition=Q(qty_picked__gte=0) & Q(qty_picked__lte=models.F("qty_allocated")),
+                name="allocation_picked_within_allocated",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["sales_order_id"], name="allocation_order_idx"),
+            models.Index(fields=["order_line_id"], name="allocation_line_idx"),
+            models.Index(
+                fields=["balance"], name="allocation_open_balance_idx", condition=Q(status__in=["reserved", "released"])
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.order_line_id} {self.qty_allocated} from {self.balance_id}"
