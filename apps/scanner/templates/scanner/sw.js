@@ -3,10 +3,8 @@ const CACHE = "scanner-{{ build_id }}";
 const SHELL = "{% url 'scanner:index' %}";
 const ASSETS = [
   SHELL,
-  "{% static 'scanner/app.js' %}",
-  "{% static 'scanner/app.css' %}",
-  "{% static 'scanner/icon.svg' %}",
-  "{% url 'scanner:manifest' %}",
+{% for asset in assets %}  "{% static asset %}",
+{% endfor %}  "{% url 'scanner:manifest' %}",
 ];
 
 self.addEventListener("install", (event) => {

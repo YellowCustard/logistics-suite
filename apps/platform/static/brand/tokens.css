@@ -1,0 +1,42 @@
+/* Nuronteq brand tokens (Brand Identity v1.0). Fonts are self-hosted latin subsets (SIL OFL 1.1, see fonts/)
+   because the scanner's CSP allows only 'self' and it has to render offline. */
+
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("fonts/inter-latin-wght.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("fonts/space-grotesk-latin-600.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("fonts/jetbrains-mono-latin-500.woff2") format("woff2");
+}
+
+:root {
+  --nq-ink: #0b1020;            /* primary text, dark surfaces */
+  --nq-indigo: #5b5bff;         /* brand, buttons, links; white on it is 4.8:1 */
+  --nq-indigo-on-ink: #6e6eff;
+  --nq-synapse: #44a0ea;        /* hidden-layer nodes only */
+  --nq-cyan: #2ee6d6;           /* highlights and live status; never body text on white */
+  --nq-mist: #eef1fa;           /* cards and panels */
+  --nq-mist-light: #f6f7fc;     /* lightest ground */
+  --nq-slate: #4a5270;          /* secondary text on light */
+  --nq-slate-on-ink: #9aa3c0;
+
+  --nq-font-display: "Space Grotesk", "Inter", system-ui, sans-serif;
+  --nq-font-text: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --nq-font-label: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
