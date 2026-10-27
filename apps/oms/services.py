@@ -15,7 +15,18 @@ from apps.platform import outbox
 from apps.platform.apiutils import Problem
 from apps.platform.numbers import next_number
 
-from .models import InboundLineStatus, InboundNotice, InboundNoticeLine, InboundStatus
+from .models import (
+    CANCELLABLE,
+    QTY_STEP,
+    InboundLineStatus,
+    InboundNotice,
+    InboundNoticeLine,
+    InboundStatus,
+    OrderLine,
+    OrderLineStatus,
+    OrderStatus,
+    SalesOrder,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,3 +248,149 @@ def record_receipt(inbound_notice_id: uuid.UUID, received: list[dict]) -> Inboun
         notice.status = InboundStatus.CLOSED
         notice.save()
     return notice
+
+
+# --- Outbound sales orders ------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class OrderLineIn:
+    qty: Decimal
+    uom: str = ""
+    sku: str | None = None
+    barcode: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ShipToIn:
+    """A consignee given inline: reused if this client already has the same name and address."""
+
+    name: str
+    address: str
+    latitude: Decimal | None = None
+    longitude: Decimal | None = None
+
+
+def resolve_ship_to(client: Party, *, code: str = "", inline: ShipToIn | None = None) -> Site:
+    if code.strip():
+        return masterdata.client_delivery_address(client.pk, code)
+    if inline is not None:
+        return masterdata.ensure_delivery_address(
+            client.pk, name=inline.name, address=inline.address, latitude=inline.latitude, longitude=inline.longitude
+        )
+    raise Problem(422, "Delivery address required", "Give ship_to_code or a ship_to name and address.")
+
+
+@transaction.atomic
+def create_sales_order(
+    *,
+    client: Party,
+    site: Site,
+    ship_to: Site,
+    lines: list[OrderLineIn],
+    client_ref: str = "",
+    required_by: date | None = None,
+    contact_name: str = "",
+    contact_phone: str = "",
+    delivery_instructions: str = "",
+    notes: str = "",
+) -> SalesOrder:
+    """Validate and accept an order. Stock is checked by allocation, which runs on the accepted event: an
+    order that can't be filled is backordered with a reason rather than rejected here, because OMS never
+    reads warehouse stock."""
+    if site.kind != SiteKind.WAREHOUSE or not site.is_active:
+        raise Problem(422, "Not a warehouse", f"{site.code} does not ship stock.")
+    if ship_to.kind != SiteKind.DELIVERY_ADDRESS or ship_to.party_id != client.pk or not ship_to.is_active:
+        raise Problem(422, "Unknown delivery address", f"{ship_to.code} is not a delivery address of this client.")
+    if not lines:
+        raise Problem(422, "No lines", "An order needs at least one line.")
+    client_ref = client_ref.strip()
+    if client_ref and SalesOrder.objects.filter(client=client, client_ref=client_ref).exists():
+        raise Problem(409, "Duplicate reference", f"An order with reference {client_ref!r} already exists.")
+
+    resolved = []
+    errors = []
+    for n, line in enumerate(lines, start=1):
+        try:
+            item = masterdata.client_item(client.pk, sku=line.sku, barcode=line.barcode)
+            uom = (line.uom or item.base_uom).strip().upper()
+            if line.qty <= 0:
+                raise Problem(422, "Invalid quantity", f"{item.sku}: quantity must be positive.")
+            base_qty = masterdata.to_base_qty(item, line.qty, uom).quantize(QTY_STEP)
+        except Problem as problem:
+            errors.append({"line": n, "title": problem.title, "detail": problem.detail})
+            continue
+        resolved.append((item, uom, line.qty.quantize(QTY_STEP), base_qty))
+    if errors:
+        detail = "; ".join(f"line {e['line']}: {e['detail'] or e['title']}" for e in errors)
+        raise Problem(422, "Invalid order lines", detail, errors=errors)
+
+    try:
+        with transaction.atomic():
+            order = SalesOrder.objects.create(
+                client=client,
+                site=site,
+                number=next_number("sales_order", "ORD"),
+                client_ref=client_ref,
+                ship_to=ship_to,
+                required_by=required_by,
+                contact_name=contact_name.strip(),
+                contact_phone=contact_phone.strip(),
+                delivery_instructions=delivery_instructions.strip(),
+                notes=notes,
+            )
+    except IntegrityError as exc:  # a concurrent request with the same client_ref won
+        raise Problem(409, "Duplicate reference", f"Reference {client_ref!r} already exists.") from exc
+    created = [
+        OrderLine.objects.create(order=order, line_no=n, item=item, qty=qty, uom=uom, base_qty=base_qty)
+        for n, (item, uom, qty, base_qty) in enumerate(resolved, start=1)
+    ]
+    outbox.emit(
+        "oms.sales_order.accepted",
+        aggregate_type="oms.sales_order",
+        aggregate_id=order.pk,
+        client_id=client.pk,
+        site_id=site.pk,
+        payload={
+            "sales_order_id": str(order.pk),
+            "number": order.number,
+            "client_ref": order.client_ref,
+            "ship_to_site_id": str(ship_to.pk),
+            "required_by": required_by.isoformat() if required_by else None,
+            "lines": [
+                {
+                    "line_id": str(line.pk),
+                    "item_id": str(line.item_id),
+                    "qty": str(line.qty),
+                    "uom": line.uom,
+                    "base_qty": str(line.base_qty),
+                }
+                for line in created
+            ],
+        },
+    )
+    return order
+
+
+@transaction.atomic
+def cancel_sales_order(order_id: uuid.UUID, reason: str) -> SalesOrder:
+    if not reason.strip():
+        raise Problem(422, "Reason required", "Say why the order is cancelled.")
+    order = SalesOrder.objects.select_for_update().get(pk=order_id)
+    if order.status == OrderStatus.CANCELLED:
+        return order
+    if order.status not in CANCELLABLE:
+        raise Problem(409, "Picking has started", f"{order.number} is {order.status} and can't be cancelled.")
+    order.status = OrderStatus.CANCELLED
+    order.cancelled_reason = reason.strip()
+    order.save()
+    order.lines.filter(status=OrderLineStatus.OPEN).update(status=OrderLineStatus.CANCELLED)
+    outbox.emit(
+        "oms.sales_order.cancelled",
+        aggregate_type="oms.sales_order",
+        aggregate_id=order.pk,
+        client_id=order.client_id,
+        site_id=order.site_id,
+        payload={"sales_order_id": str(order.pk), "number": order.number, "reason": order.cancelled_reason},
+    )
+    return order

@@ -11,7 +11,7 @@ putaway).
 |---|---|
 | `apps/platform` | Bottom layer: users and roles, principals and scoping, API tokens, audit log, transactional outbox, idempotency, documents, exception queue, business numbers, CSV import engine |
 | `apps/masterdata` | Clients and other parties, sites, items (UoMs, barcodes), vehicles, drivers, contracts, versioned rate cards |
-| `apps/oms` | Inbound notices (ASNs and returns). Outbound orders arrive in M2 |
+| `apps/oms` | Inbound notices (ASNs and returns) and outbound sales orders (API, CSV import, cancellation) |
 | `apps/wms` | Bins, receiving, the inventory ledger (`ledger.py`, the only code that changes stock), putaway. Picking arrives in M2 |
 | `config` | Settings (environment-driven), URLs, API root |
 | `tests` | pytest suite against real PostgreSQL, including the M0 exit test |
