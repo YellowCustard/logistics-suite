@@ -3,15 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#1f3a5f">
+  <meta name="theme-color" content="#0b1020">
   <title>Scanner</title>
   <link rel="manifest" href="{% url 'scanner:manifest' %}">
-  <link rel="icon" href="{% static 'scanner/icon.svg' %}">
+  <link rel="icon" href="{% static 'brand/favicon.svg' %}" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="{% static 'brand/apple-touch-icon.png' %}">
+  <link rel="stylesheet" href="{% static 'brand/tokens.css' %}">
   <link rel="stylesheet" href="{% static 'scanner/app.css' %}">
 </head>
 <body data-csrf-cookie="{{ csrf_cookie_name }}" data-sw="{% url 'scanner:sw' %}" data-build="{{ build_id }}">
   <header id="bar">
-    <span id="title">Scanner</span>
+    <span class="brand"><img src="{% static 'brand/mark-simple.svg' %}" alt="" width="24" height="24"><span id="title">Scanner</span></span>
     <span id="status" role="status" aria-live="polite"></span>
   </header>
   <main id="app"><p class="muted">Loading…</p></main>

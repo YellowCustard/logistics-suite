@@ -36,6 +36,7 @@ FIELD_ENCRYPTION_KEYS = [
 ]
 
 INSTALLED_APPS = [
+    "apps.platform",  # first, so its admin/base_site.html (Nuronteq skin) overrides the stock one
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -43,7 +44,6 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "django.contrib.postgres",
-    "apps.platform",
     "apps.masterdata",
     "apps.oms",
     "apps.wms",
