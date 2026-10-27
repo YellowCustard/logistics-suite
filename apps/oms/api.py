@@ -16,7 +16,7 @@ from apps.platform.auth import Principal
 from apps.platform.models import Role
 
 from . import services
-from .models import InboundKind, InboundNotice, InboundStatus
+from .models import InboundKind, InboundNotice, InboundStatus, OrderStatus, SalesOrder
 
 router = Router(tags=["orders"])
 
@@ -224,3 +224,256 @@ def cancel_inbound_notice(request, notice_id: uuid.UUID, body: CancelIn):
         require_roles(principal, Role.CLIENT_ADMIN, Role.CLIENT_USER)
     notice = get_scoped(_notices(principal), notice_id)
     return services.cancel_inbound_notice(notice.pk, body.reason)
+
+
+# --- Outbound sales orders ------------------------------------------------------------------------------------
+
+
+class OrderLineIn(Schema):
+    sku: str | None = None
+    barcode: str | None = None
+    qty: Annotated[Decimal, Field(gt=0, max_digits=14, decimal_places=3)]
+    uom: str = ""
+
+
+class ShipToIn(Schema):
+    name: str = Field(..., max_length=120)
+    address: str
+    latitude: Annotated[Decimal, Field(ge=-90, le=90)] | None = None
+    longitude: Annotated[Decimal, Field(ge=-180, le=180)] | None = None
+
+
+class SalesOrderIn(Schema):
+    client_id: uuid.UUID | None = Field(None, description="Staff only; client systems always act for themselves")
+    site_code: str = Field(..., description="Shipping warehouse")
+    client_ref: str = Field("", max_length=60)
+    ship_to_code: str = Field("", description="An existing delivery address; or give ship_to instead")
+    ship_to: ShipToIn | None = None
+    required_by: date | None = None
+    contact_name: str = Field("", max_length=120)
+    contact_phone: str = Field("", max_length=30)
+    delivery_instructions: str = ""
+    notes: str = ""
+    lines: list[OrderLineIn] = Field(..., min_length=1, max_length=500)
+
+
+class OrderLineOut(Schema):
+    id: uuid.UUID
+    line_no: int
+    item_id: uuid.UUID
+    sku: str
+    qty: Decimal
+    uom: str
+    base_qty: Decimal
+    status: str
+
+    @staticmethod
+    def resolve_sku(obj) -> str:
+        return obj.item.sku
+
+
+class ShipToOut(Schema):
+    id: uuid.UUID
+    code: str
+    name: str
+    address: str
+
+
+class SalesOrderOut(Schema):
+    id: uuid.UUID
+    number: str
+    client_id: uuid.UUID
+    site_id: uuid.UUID
+    client_ref: str
+    ship_to: ShipToOut
+    required_by: date | None
+    status: str
+    contact_name: str
+    contact_phone: str
+    delivery_instructions: str
+    notes: str
+    cancelled_reason: str
+    created_at: datetime
+    lines: list[OrderLineOut]
+
+    @staticmethod
+    def resolve_lines(obj: SalesOrder):
+        return list(obj.lines.select_related("item").order_by("line_no"))
+
+
+class SalesOrderSummary(Schema):
+    id: uuid.UUID
+    number: str
+    client_id: uuid.UUID
+    site_id: uuid.UUID
+    client_ref: str
+    ship_to_id: uuid.UUID
+    required_by: date | None
+    status: str
+    created_at: datetime
+
+
+class SalesOrderPage(Schema):
+    items: list[SalesOrderSummary]
+    next_cursor: uuid.UUID | None
+
+
+def _orders(principal: Principal) -> QuerySet:
+    return principal.scope(SalesOrder.objects.all(), site_field=None if principal.is_client_scoped else "site_id")
+
+
+def _order_client(principal: Principal, client_id: uuid.UUID | None):
+    if principal.is_client_scoped and principal.kind == "user":
+        require_roles(principal, Role.CLIENT_ADMIN, Role.CLIENT_USER)
+    return masterdata.require_client(acting_client_id(principal, client_id, *STAFF_WRITERS))
+
+
+@router.post("/orders", response={201: SalesOrderOut})
+def create_order(request, body: SalesOrderIn):
+    """Place an outbound order. Give the delivery address as `ship_to_code` (an address on file) or as an inline
+    `ship_to`, which is reused when the same name and address come again. Stock is allocated right after
+    acceptance; an order that can't be filled becomes `backordered`."""
+    principal = principal_of(request)
+    client = _order_client(principal, body.client_id)
+    ship_to = services.resolve_ship_to(
+        client,
+        code=body.ship_to_code,
+        inline=services.ShipToIn(**body.ship_to.dict()) if body.ship_to else None,
+    )
+    order = services.create_sales_order(
+        client=client,
+        site=_site_for(principal, body.site_code),
+        ship_to=ship_to,
+        client_ref=body.client_ref,
+        required_by=body.required_by,
+        contact_name=body.contact_name,
+        contact_phone=body.contact_phone,
+        delivery_instructions=body.delivery_instructions,
+        notes=body.notes,
+        lines=[services.OrderLineIn(**line.dict()) for line in body.lines],
+    )
+    return Status(201, order)
+
+
+class OrderRow(BaseModel):
+    """One CSV row is one order line; rows sharing a client_ref make one order."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    client_ref: Annotated[str, StringConstraints(min_length=1, max_length=60)]
+    site_code: Annotated[str, StringConstraints(min_length=1, to_upper=True)]
+    ship_to_code: str = ""
+    ship_to_name: str = ""
+    ship_to_address: str = ""
+    required_by: date | None = None
+    sku: str | None = None
+    barcode: str | None = None
+    qty: Annotated[Decimal, Field(gt=0, max_digits=14, decimal_places=3)]
+    uom: str = ""
+    contact_name: str = ""
+    contact_phone: str = ""
+    delivery_instructions: str = ""
+    notes: str = ""
+
+    def header(self) -> tuple:
+        return (
+            self.site_code,
+            self.ship_to_code,
+            self.ship_to_name,
+            self.ship_to_address,
+            self.required_by,
+            self.contact_name,
+            self.contact_phone,
+            self.delivery_instructions,
+            self.notes,
+        )
+
+
+class ImportedOrder(Schema):
+    id: uuid.UUID
+    number: str
+    client_ref: str
+
+
+class OrderImportOut(Schema):
+    created: int
+    document_id: str
+    orders: list[ImportedOrder]
+
+
+@router.post("/orders:import", response={201: OrderImportOut})
+def import_orders(request, file: File[UploadedFile], client_id: uuid.UUID | None = None):
+    """Upload orders as CSV (all or nothing). Columns: client_ref, site_code, ship_to_code (or ship_to_name and
+    ship_to_address), sku or barcode, qty, and optionally uom, required_by, contact_name, contact_phone,
+    delivery_instructions, notes. Rows sharing a client_ref make one order and must agree on everything but
+    the line columns. Staff name the client with `?client_id=`."""
+    principal = principal_of(request)
+    client = _order_client(principal, client_id)
+
+    def create(rows: list[OrderRow]) -> SalesOrder:
+        head = rows[0]
+        if any(r.header() != head.header() for r in rows[1:]):
+            raise Problem(
+                422,
+                "Inconsistent order",
+                f"Rows for {head.client_ref!r} must agree on everything but sku, qty and uom.",
+            )
+        inline = (
+            services.ShipToIn(name=head.ship_to_name, address=head.ship_to_address)
+            if head.ship_to_name or head.ship_to_address
+            else None
+        )
+        return services.create_sales_order(
+            client=client,
+            site=_site_for(principal, head.site_code),
+            ship_to=services.resolve_ship_to(client, code=head.ship_to_code, inline=inline),
+            client_ref=head.client_ref,
+            required_by=head.required_by,
+            contact_name=head.contact_name,
+            contact_phone=head.contact_phone,
+            delivery_instructions=head.delivery_instructions,
+            notes=head.notes,
+            lines=[services.OrderLineIn(sku=r.sku, barcode=r.barcode, qty=r.qty, uom=r.uom) for r in rows],
+        )
+
+    result, orders = csvimport.run_groups(
+        file, OrderRow, lambda row: row.client_ref, create, client_id=client.pk, linked_type="oms.import"
+    )
+    return Status(201, {"created": result.created, "document_id": result.document_id, "orders": orders})
+
+
+@router.get("/orders", response=SalesOrderPage)
+def list_orders(
+    request,
+    status: OrderStatus | None = None,
+    site_id: uuid.UUID | None = None,
+    required_by: date | None = None,
+    cursor: uuid.UUID | None = None,
+    limit: int = 50,
+):
+    qs = _orders(principal_of(request))
+    if status:
+        qs = qs.filter(status=status)
+    if site_id:
+        qs = qs.filter(site_id=site_id)
+    if required_by:
+        qs = qs.filter(required_by__lte=required_by)
+    items, next_cursor = paginate(qs, cursor, limit)
+    return {"items": items, "next_cursor": next_cursor}
+
+
+@router.get("/orders/{order_id}", response=SalesOrderOut)
+def get_order(request, order_id: uuid.UUID):
+    return get_scoped(_orders(principal_of(request)).select_related("ship_to"), order_id)
+
+
+@router.post("/orders/{order_id}/cancel", response=SalesOrderOut)
+def cancel_order(request, order_id: uuid.UUID, body: CancelIn):
+    """Cancel an order until picking starts."""
+    principal = principal_of(request)
+    if not principal.is_client_scoped:
+        require_roles(principal, *STAFF_WRITERS)
+    elif principal.kind == "user":
+        require_roles(principal, Role.CLIENT_ADMIN, Role.CLIENT_USER)
+    order = get_scoped(_orders(principal), order_id)
+    return services.cancel_sales_order(order.pk, body.reason)

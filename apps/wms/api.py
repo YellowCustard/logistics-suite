@@ -19,19 +19,24 @@ from apps.platform.apiutils import Problem, get_scoped, paginate, principal_of, 
 from apps.platform.auth import Principal
 from apps.platform.models import Role
 
-from . import adjustments, counting, putaway, receiving
+from . import adjustments, allocation, counting, picking, putaway, receiving
 from .models import (
+    Allocation,
     Condition,
     CountStatus,
     CycleCount,
     InventoryBalance,
     Location,
     LocationKind,
+    PickTask,
+    PickTaskStatus,
+    PickWave,
     PutawayTask,
     Receipt,
     ReceiptStatus,
     StockStatus,
     TaskStatus,
+    WaveStatus,
 )
 
 router = Router(tags=["warehouse"])
@@ -266,6 +271,56 @@ class PutawayConfirmIn(Schema):
     command_id: uuid.UUID | None = None
 
 
+class PickTaskOut(Schema):
+    id: uuid.UUID
+    type: str = "pick"
+    site_id: uuid.UUID
+    client_id: uuid.UUID
+    wave_id: uuid.UUID
+    wave_number: str
+    sales_order_id: uuid.UUID
+    item_id: uuid.UUID
+    sku: str
+    lot: str
+    expiry: date | None
+    qty: Decimal
+    qty_picked: Decimal
+    from_location: str
+    pick_sequence: int
+    status: str
+    assigned_to: uuid.UUID | None
+    short_reason: str
+
+    @staticmethod
+    def resolve_wave_number(obj: PickTask):
+        return obj.wave.number
+
+    @staticmethod
+    def resolve_sku(obj: PickTask):
+        return obj.item.sku
+
+    @staticmethod
+    def resolve_lot(obj: PickTask):
+        return obj.allocation.balance.lot
+
+    @staticmethod
+    def resolve_expiry(obj: PickTask):
+        return obj.allocation.balance.expiry
+
+    @staticmethod
+    def resolve_from_location(obj: PickTask):
+        return obj.from_location.code
+
+    @staticmethod
+    def resolve_pick_sequence(obj: PickTask):
+        return obj.from_location.pick_sequence
+
+
+def _pick_tasks(principal: Principal) -> QuerySet:
+    qs = PickTask.objects.select_related("wave", "item", "from_location", "allocation__balance")
+    return _staff_scoped(principal, qs)
+
+
 def _tasks(principal: Principal) -> QuerySet:
     qs = PutawayTask.objects.select_related("from_balance__item", "from_balance__location", "suggested_location")
     return _staff_scoped(principal, qs)
@@ -286,10 +341,14 @@ def list_tasks(
     return {"items": items, "next_cursor": next_cursor}
 
 
-@router.post("/tasks/{task_id}/claim", response=TaskOut)
+@router.post("/tasks/{task_id}/claim", response=TaskOut | PickTaskOut)
 def claim_task(request, task_id: uuid.UUID):
+    """Claim a putaway or a pick task."""
     principal = principal_of(request)
     require_roles(principal, *OPERATORS)
+    if _pick_tasks(principal).filter(pk=task_id).exists():
+        picking.claim(task_id, principal.id)
+        return _pick_tasks(principal).get(pk=task_id)
     task = get_scoped(_tasks(principal), task_id)
     putaway.claim(task.pk, principal.id)
     return _tasks(principal).get(pk=task.pk)
@@ -686,6 +745,7 @@ class PullOut(Schema):
     items: list[PullItem]
     notices: list[PullNotice]
     tasks: list[TaskOut]
+    pick_tasks: list[PickTaskOut]
     counts: list[PullCount]
 
 
@@ -704,11 +764,13 @@ def sync_pull(request, site_id: uuid.UUID, cursor: datetime | None = None):
     locations = Location.objects.filter(site=site)
     items = principal.scope(Item.objects.all(), client_field="client_id").prefetch_related("uoms", "barcodes")
     tasks = _tasks(principal).filter(site_id=site.pk)
+    pick_tasks = _pick_tasks(principal).filter(site_id=site.pk)
     counts = CycleCount.objects.filter(site=site).prefetch_related("locations")
     if since is None:
         locations = locations.filter(is_active=True)
         items = items.filter(is_active=True)
         tasks = tasks.filter(status__in=[TaskStatus.OPEN, TaskStatus.CLAIMED])
+        pick_tasks = pick_tasks.filter(status__in=[PickTaskStatus.OPEN, PickTaskStatus.CLAIMED])
         counts = counts.filter(status=CountStatus.OPEN)
     else:
         locations = locations.filter(updated_at__gte=since)
@@ -716,6 +778,7 @@ def sync_pull(request, site_id: uuid.UUID, cursor: datetime | None = None):
             Q(updated_at__gte=since) | Q(uoms__updated_at__gte=since) | Q(barcodes__updated_at__gte=since)
         ).distinct()
         tasks = tasks.filter(updated_at__gte=since)
+        pick_tasks = pick_tasks.filter(updated_at__gte=since)
         counts = counts.filter(updated_at__gte=since)
 
     notices = oms.dock_notices(
@@ -750,5 +813,271 @@ def sync_pull(request, site_id: uuid.UUID, cursor: datetime | None = None):
             for n in notices
         ],
         "tasks": list(tasks.order_by("created_at")),
+        "pick_tasks": list(pick_tasks.order_by("from_location__pick_sequence", "from_location__code", "created_at")),
         "counts": list(counts.order_by("created_at")),
     }
+
+
+# --- Allocation ---------------------------------------------------------------------------------------------------
+
+
+class AllocationRunIn(Schema):
+    site_id: uuid.UUID
+    sales_order_ids: list[uuid.UUID] | None = Field(
+        None, max_length=500, description="Defaults to every backordered order at the site"
+    )
+
+
+class AllocationLineOut(Schema):
+    order_line_id: uuid.UUID
+    item_id: uuid.UUID
+    qty_requested: Decimal
+    qty_allocated: Decimal
+
+
+class AllocationResultOut(Schema):
+    sales_order_id: uuid.UUID
+    number: str
+    fully_allocated: bool
+    lines: list[AllocationLineOut]
+
+
+class AllocationOut(Schema):
+    id: uuid.UUID
+    sales_order_id: uuid.UUID
+    order_line_id: uuid.UUID
+    balance_id: uuid.UUID
+    location_code: str
+    lot: str
+    expiry: date | None
+    qty_allocated: Decimal
+    qty_picked: Decimal
+    status: str
+
+
+@router.post("/allocations:run", response=list[AllocationResultOut])
+def run_allocation(request, body: AllocationRunIn):
+    """Re-run allocation, e.g. after stock arrives: tops up backordered orders, oldest required-by first."""
+    principal = principal_of(request)
+    require_staff(principal)
+    require_roles(principal, *SUPERVISORS)
+    if not principal.can_see_site(body.site_id):
+        raise Problem(404, "Not found", "Unknown site.")
+    order_ids = body.sales_order_ids
+    if order_ids is not None:
+        # Only orders at this site for clients the caller can see; others are silently skipped (no id leaks).
+        order_ids = [
+            order_id
+            for order_id in order_ids
+            if (order := oms.order_summary(order_id)) is not None
+            and order.site_id == body.site_id
+            and principal.can_see_client(order.client_id)
+        ]
+    else:
+        order_ids = [
+            order_id
+            for order_id in oms.orders_to_allocate(body.site_id)
+            if principal.can_see_client(oms.order_summary(order_id).client_id)
+        ]
+    return [
+        {
+            "sales_order_id": result.sales_order_id,
+            "number": result.number,
+            "fully_allocated": result.fully_allocated,
+            "lines": result.lines,
+        }
+        for result in allocation.rerun(body.site_id, order_ids)
+    ]
+
+
+@router.get("/allocations", response=list[AllocationOut])
+def list_allocations(request, sales_order_id: uuid.UUID):
+    """Where an order's stock is reserved, bin by bin."""
+    principal = principal_of(request)
+    require_staff(principal)
+    qs = principal.scope(Allocation.objects.filter(sales_order_id=sales_order_id), site_field="site_id")
+    return list(
+        qs.annotate(
+            location_code=F("balance__location__code"), lot=F("balance__lot"), expiry=F("balance__expiry")
+        ).order_by("created_at", "id")
+    )
+
+
+# --- Waves and picking --------------------------------------------------------------------------------------------
+
+
+class WaveIn(Schema):
+    site_id: uuid.UUID
+    sales_order_ids: list[uuid.UUID] = Field(min_length=1, max_length=picking.MAX_WAVE_ORDERS)
+
+
+class WaveOrderOut(Schema):
+    sales_order_id: uuid.UUID
+    number: str
+    client_id: uuid.UUID
+
+
+class WaveOut(Schema):
+    id: uuid.UUID
+    number: str
+    site_id: uuid.UUID
+    status: str
+    orders: list[WaveOrderOut]
+    tasks_total: int
+    tasks_open: int
+    tasks_short: int
+    released_at: datetime | None
+    completed_at: datetime | None
+
+    @staticmethod
+    def resolve_orders(obj: PickWave):
+        return list(obj.orders.order_by("number"))
+
+    @staticmethod
+    def resolve_tasks_total(obj: PickWave):
+        return obj.tasks.count()
+
+    @staticmethod
+    def resolve_tasks_open(obj: PickWave):
+        return obj.tasks.filter(status__in=[PickTaskStatus.OPEN, PickTaskStatus.CLAIMED]).count()
+
+    @staticmethod
+    def resolve_tasks_short(obj: PickWave):
+        return obj.tasks.filter(status=PickTaskStatus.SHORT).count()
+
+
+class WavePage(Schema):
+    items: list[WaveOut]
+    next_cursor: uuid.UUID | None
+
+
+class PickTaskPage(Schema):
+    items: list[PickTaskOut]
+    next_cursor: uuid.UUID | None
+
+
+class PickConfirmIn(Schema):
+    location_code: str
+    item_code: str = Field(description="Item barcode or SKU, as scanned")
+    qty: Decimal = Field(gt=0, description="Base units")
+    command_id: uuid.UUID | None = None
+
+
+class PickShortIn(Schema):
+    location_code: str
+    qty_found: Decimal = Field(ge=0, description="Base units actually picked")
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+    command_id: uuid.UUID | None = None
+
+
+def _waves(principal: Principal) -> QuerySet:
+    require_staff(principal)
+    return principal.scope(PickWave.objects.all(), client_field=None, site_field="site_id")
+
+
+@router.post("/waves", response={201: WaveOut})
+def plan_wave(request, body: WaveIn):
+    """Plan a wave from allocated orders at one site. Nothing reaches the floor until it is released."""
+    principal = principal_of(request)
+    require_staff(principal)
+    require_roles(principal, *SUPERVISORS)
+    site = _site(principal, body.site_id)
+    hidden = [
+        order_id
+        for order_id in body.sales_order_ids
+        if (order := oms.order_summary(order_id)) is None or not principal.can_see_client(order.client_id)
+    ]
+    if hidden:
+        raise Problem(422, "Orders can't be waved", f"{len(hidden)} unknown order(s).")
+    wave = picking.plan_wave(site_id=site.pk, order_ids=body.sales_order_ids, created_by=principal.id)
+    return Status(201, wave)
+
+
+@router.get("/waves", response=WavePage)
+def list_waves(
+    request,
+    site_id: uuid.UUID | None = None,
+    status: WaveStatus | None = None,
+    cursor: uuid.UUID | None = None,
+    limit: int = 50,
+):
+    qs = _waves(principal_of(request))
+    if site_id:
+        qs = qs.filter(site_id=site_id)
+    if status:
+        qs = qs.filter(status=status)
+    items, next_cursor = paginate(qs, cursor, limit)
+    return {"items": items, "next_cursor": next_cursor}
+
+
+@router.get("/waves/{wave_id}", response=WaveOut)
+def get_wave(request, wave_id: uuid.UUID):
+    return get_scoped(_waves(principal_of(request)), wave_id)
+
+
+@router.post("/waves/{wave_id}/release", response=WaveOut)
+def release_wave(request, wave_id: uuid.UUID):
+    """Start picking: the wave's orders can no longer be cancelled and pick tasks appear on the scanners."""
+    principal = principal_of(request)
+    require_roles(principal, *SUPERVISORS)
+    wave = get_scoped(_waves(principal), wave_id)
+    return picking.release_wave(wave.pk)
+
+
+@router.get("/pick-tasks", response=PickTaskPage)
+def list_pick_tasks(
+    request,
+    wave_id: uuid.UUID | None = None,
+    site_id: uuid.UUID | None = None,
+    mine: bool = False,
+    open_only: bool = True,
+    cursor: uuid.UUID | None = None,
+    limit: int = 100,
+):
+    principal = principal_of(request)
+    require_roles(principal, *OPERATORS)
+    qs = _pick_tasks(principal)
+    if open_only:
+        qs = qs.filter(status__in=[PickTaskStatus.OPEN, PickTaskStatus.CLAIMED])
+    if wave_id:
+        qs = qs.filter(wave_id=wave_id)
+    if site_id:
+        qs = qs.filter(site_id=site_id)
+    if mine:
+        qs = qs.filter(assigned_to=principal.id)
+    items, next_cursor = paginate(qs, cursor, limit)
+    return {"items": items, "next_cursor": next_cursor}
+
+
+def _pick_task_for_operator(principal: Principal, task_id: uuid.UUID) -> PickTask:
+    require_roles(principal, *OPERATORS)
+    task = get_scoped(_pick_tasks(principal), task_id)
+    if task.assigned_to and task.assigned_to != principal.id:
+        raise Problem(409, "Task claimed", "Another operator has this task.")
+    return task
+
+
+@router.post("/pick-tasks/{task_id}/confirm", response=PickTaskOut)
+def confirm_pick(request, task_id: uuid.UUID, body: PickConfirmIn):
+    principal = principal_of(request)
+    task = _pick_task_for_operator(principal, task_id)
+    picking.confirm(
+        task.pk, location_code=body.location_code, item_code=body.item_code, qty=body.qty, command_id=body.command_id
+    )
+    return _pick_tasks(principal).get(pk=task.pk)
+
+
+@router.post("/pick-tasks/{task_id}/short", response=PickTaskOut)
+def short_pick(request, task_id: uuid.UUID, body: PickShortIn):
+    """Report that the bin held less than the task asked for. What was found is picked; the rest is looked for
+    in other bins and added to the wave, or reported short."""
+    principal = principal_of(request)
+    task = _pick_task_for_operator(principal, task_id)
+    picking.short(
+        task.pk,
+        location_code=body.location_code,
+        qty_found=body.qty_found,
+        reason=body.reason,
+        command_id=body.command_id,
+    )
+    return _pick_tasks(principal).get(pk=task.pk)

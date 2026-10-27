@@ -1,4 +1,4 @@
-"""Warehouse module: bins, receiving, putaway, counts, and the inventory ledger."""
+"""Warehouse module: bins, receiving, putaway, counts, allocation, and the inventory ledger."""
 
 from decimal import Decimal
 
@@ -294,3 +294,154 @@ class CycleCountLine(Audited, BaseModel):
 
     def __str__(self) -> str:
         return f"{self.count.number} {self.location_id} {self.item_id}"
+
+
+# --- Allocation ---------------------------------------------------------------------------------------------------
+
+
+class AllocationStatus(models.TextChoices):
+    RESERVED = "reserved"
+    RELEASED = "released", "Released to a pick wave"
+    PICKED = "picked"
+    SHORT = "short", "Shorted at the pick face"
+    CANCELLED = "cancelled"
+
+
+# Allocations that still hold (or held and consumed) stock for their order line.
+ACTIVE_ALLOCATION = (AllocationStatus.RESERVED, AllocationStatus.RELEASED, AllocationStatus.PICKED)
+
+
+class Allocation(Audited, BaseModel):
+    """Stock earmarked for one order line from one balance. The sum of open allocations on a balance equals
+    its qty_allocated (checked nightly by reconciliation)."""
+
+    client = models.ForeignKey(Party, on_delete=models.PROTECT, related_name="+")
+    site = models.ForeignKey(Site, on_delete=models.PROTECT, related_name="+")
+    sales_order_id = models.UUIDField(help_text="oms.SalesOrder (cross-module id, no foreign key)")
+    order_line_id = models.UUIDField(help_text="oms.OrderLine (cross-module id, no foreign key)")
+    balance = models.ForeignKey(InventoryBalance, on_delete=models.PROTECT, related_name="allocations")
+    pick_wave = models.ForeignKey(
+        "PickWave", null=True, blank=True, on_delete=models.PROTECT, related_name="allocations"
+    )
+    qty_allocated = models.DecimalField(**QTY, help_text="Base units")
+    qty_picked = models.DecimalField(**QTY, default=0, help_text="Base units")
+    status = models.CharField(max_length=10, choices=AllocationStatus.choices, default=AllocationStatus.RESERVED)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=Q(qty_allocated__gt=0), name="allocation_qty_positive"),
+            models.CheckConstraint(
+                condition=Q(qty_picked__gte=0) & Q(qty_picked__lte=models.F("qty_allocated")),
+                name="allocation_picked_within_allocated",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["sales_order_id"], name="allocation_order_idx"),
+            models.Index(fields=["order_line_id"], name="allocation_line_idx"),
+            models.Index(
+                fields=["balance"], name="allocation_open_balance_idx", condition=Q(status__in=["reserved", "released"])
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.order_line_id} {self.qty_allocated} from {self.balance_id}"
+
+
+# --- Waves and picking ------------------------------------------------------------------------------------------
+
+
+class WaveStatus(models.TextChoices):
+    PLANNED = "planned"
+    RELEASED = "released"
+    COMPLETED = "completed"
+
+
+class PickWave(Audited, BaseModel):
+    """A batch of allocated orders released to the floor together. Releasing starts picking on its orders
+    (they can no longer be cancelled) and creates one pick task per allocation."""
+
+    site = models.ForeignKey(Site, on_delete=models.PROTECT, related_name="+")
+    number = models.CharField(max_length=30, unique=True)
+    status = models.CharField(max_length=10, choices=WaveStatus.choices, default=WaveStatus.PLANNED)
+    created_by = models.UUIDField(null=True, blank=True)
+    released_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(status="planned") | Q(released_at__isnull=False), name="wave_released_has_time"
+            ),
+            models.CheckConstraint(
+                condition=~Q(status="completed") | Q(completed_at__isnull=False), name="wave_completed_has_time"
+            ),
+        ]
+        indexes = [models.Index(fields=["site", "status"], name="wave_site_status_idx")]
+
+    def __str__(self) -> str:
+        return self.number
+
+
+class WaveOrder(BaseModel):
+    """An order's place in a wave. An order is picked in exactly one wave."""
+
+    wave = models.ForeignKey(PickWave, on_delete=models.CASCADE, related_name="orders")
+    client = models.ForeignKey(Party, on_delete=models.PROTECT, related_name="+")
+    sales_order_id = models.UUIDField(unique=True, help_text="oms.SalesOrder (cross-module id, no foreign key)")
+    number = models.CharField(max_length=30, help_text="The order number, copied for display")
+
+    def __str__(self) -> str:
+        return f"{self.wave_id} {self.number}"
+
+
+class PickTaskStatus(models.TextChoices):
+    OPEN = "open"
+    CLAIMED = "claimed"
+    DONE = "done"
+    SHORT = "short"
+
+
+OPEN_PICK = (PickTaskStatus.OPEN, PickTaskStatus.CLAIMED)
+
+
+class PickTask(Audited, BaseModel):
+    """Pick one allocation: go to its bin, scan the bin and the item, take the quantity."""
+
+    client = models.ForeignKey(Party, on_delete=models.PROTECT, related_name="+")
+    site = models.ForeignKey(Site, on_delete=models.PROTECT, related_name="+")
+    wave = models.ForeignKey(PickWave, on_delete=models.PROTECT, related_name="tasks")
+    allocation = models.OneToOneField(Allocation, on_delete=models.PROTECT, related_name="pick_task")
+    sales_order_id = models.UUIDField(help_text="oms.SalesOrder (cross-module id, no foreign key)")
+    item = models.ForeignKey(Item, on_delete=models.PROTECT, related_name="+")
+    from_location = models.ForeignKey(Location, on_delete=models.PROTECT, related_name="+")
+    qty = models.DecimalField(**QTY, help_text="Base units")
+    qty_picked = models.DecimalField(**QTY, default=0, help_text="Base units")
+    status = models.CharField(max_length=10, choices=PickTaskStatus.choices, default=PickTaskStatus.OPEN)
+    assigned_to = models.UUIDField(null=True, blank=True)
+    short_reason = models.CharField(max_length=200, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=Q(qty__gt=0), name="pick_qty_positive"),
+            models.CheckConstraint(
+                condition=Q(qty_picked__gte=0) & Q(qty_picked__lte=models.F("qty")), name="pick_picked_within_qty"
+            ),
+            models.CheckConstraint(
+                condition=~Q(status="done") | (Q(qty_picked=models.F("qty")) & Q(completed_at__isnull=False)),
+                name="pick_done_is_complete",
+            ),
+            models.CheckConstraint(
+                condition=~Q(status="short")
+                | (Q(qty_picked__lt=models.F("qty")) & Q(completed_at__isnull=False) & ~Q(short_reason="")),
+                name="pick_short_has_reason",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["wave", "status"], name="pick_wave_status_idx"),
+            models.Index(fields=["site", "status"], name="pick_site_status_idx"),
+            models.Index(fields=["sales_order_id"], name="pick_order_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"Pick {self.qty} {self.item_id} from {self.from_location_id}"

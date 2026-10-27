@@ -1,0 +1,105 @@
+/* Nuronteq skin for the Django admin: only overrides admin/css/base.css and dark_mode.css variables.
+   Loaded after both, so dark values are repeated for the media query and the theme toggle. */
+
+:root {
+  --primary: var(--nq-indigo);
+  --secondary: var(--nq-ink);
+  --accent: var(--nq-cyan);
+  --primary-fg: #fff;
+
+  --body-fg: var(--nq-ink);
+  --body-quiet-color: var(--nq-slate);
+  --body-medium-color: #2b3250;
+
+  --header-color: var(--nq-slate-on-ink);
+  --header-branding-color: #fff;
+  --header-bg: var(--nq-ink);
+
+  --breadcrumbs-fg: var(--nq-slate-on-ink);
+  --breadcrumbs-link-fg: #fff;
+  --breadcrumbs-bg: #1a2140;
+
+  --link-fg: var(--nq-indigo);
+  --link-hover-color: #3c3cd6;
+  --link-selected-fg: var(--nq-indigo);
+
+  --hairline-color: #e3e7f3;
+  --border-color: #d6dbea;
+  --darkened-bg: var(--nq-mist-light);
+  --selected-bg: var(--nq-mist);
+  --selected-row: var(--nq-mist);
+
+  --button-bg: var(--nq-slate);
+  --button-hover-bg: var(--nq-ink);
+  --default-button-bg: var(--nq-indigo);
+  --default-button-hover-bg: #3c3cd6;
+
+  --font-family-primary: var(--nq-font-text);
+  --font-family-monospace: var(--nq-font-label);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --primary: #262c66;
+    --body-fg: #e6e9f5;
+    --body-bg: var(--nq-ink);
+    --body-quiet-color: var(--nq-slate-on-ink);
+    --body-medium-color: #c9cee2;
+    --breadcrumbs-bg: #262c66;
+    --link-fg: var(--nq-indigo-on-ink);
+    --link-hover-color: #9c9cff;
+    --link-selected-fg: var(--nq-indigo-on-ink);
+    --hairline-color: #1c2340;
+    --border-color: #2a3252;
+    --darkened-bg: #121933;
+    --selected-bg: #161d3a;
+    --selected-row: #1d2453;
+    --button-bg: #2a3252;
+    --button-hover-bg: #3a4368;
+  }
+}
+
+html[data-theme="dark"] {
+  --primary: #262c66;
+  --body-fg: #e6e9f5;
+  --body-bg: var(--nq-ink);
+  --body-quiet-color: var(--nq-slate-on-ink);
+  --body-medium-color: #c9cee2;
+  --breadcrumbs-bg: #262c66;
+  --link-fg: var(--nq-indigo-on-ink);
+  --link-hover-color: #9c9cff;
+  --link-selected-fg: var(--nq-indigo-on-ink);
+  --hairline-color: #1c2340;
+  --border-color: #2a3252;
+  --darkened-bg: #121933;
+  --selected-bg: #161d3a;
+  --selected-row: #1d2453;
+  --button-bg: #2a3252;
+  --button-hover-bg: #3a4368;
+}
+
+#site-name, #content h1 {
+  font-family: var(--nq-font-display);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+#site-name a { display: inline-flex; align-items: center; gap: 10px; }
+#site-name a:link, #site-name a:visited { color: #fff; }
+#site-name img { flex: none; }
+
+/* Stock captions use the header colour, which disappears into the Ink page in dark mode. */
+.module h2, .module caption, .inline-group h2 {
+  background: var(--primary);
+  font-family: var(--nq-font-label);
+  font-weight: 500;
+  letter-spacing: 0.1em;
+}
+#recent-actions-module h2 {
+  font-family: var(--nq-font-display);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.login .submit-row input { background: var(--default-button-bg); }
+.login .submit-row input:hover { background: var(--default-button-hover-bg); }

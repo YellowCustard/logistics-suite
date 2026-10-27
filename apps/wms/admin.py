@@ -1,6 +1,15 @@
 from django.contrib import admin
 
-from .models import InventoryBalance, InventoryMovement, Location, PutawayTask, Receipt, ReceiptLine
+from .models import (
+    InventoryBalance,
+    InventoryMovement,
+    Location,
+    PickTask,
+    PickWave,
+    PutawayTask,
+    Receipt,
+    ReceiptLine,
+)
 
 
 @admin.register(Location)
@@ -61,4 +70,17 @@ class InventoryMovementAdmin(ReadOnlyAdmin):
 @admin.register(PutawayTask)
 class PutawayTaskAdmin(ReadOnlyAdmin):
     list_display = ["receipt_line", "site", "qty", "suggested_location", "to_location", "status", "override_reason"]
+    list_filter = ["status", "site"]
+
+
+@admin.register(PickWave)
+class PickWaveAdmin(ReadOnlyAdmin):
+    list_display = ["number", "site", "status", "released_at", "completed_at"]
+    list_filter = ["status", "site"]
+    search_fields = ["number"]
+
+
+@admin.register(PickTask)
+class PickTaskAdmin(ReadOnlyAdmin):
+    list_display = ["wave", "item", "from_location", "qty", "qty_picked", "status", "short_reason"]
     list_filter = ["status", "site"]

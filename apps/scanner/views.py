@@ -9,7 +9,17 @@ from django.shortcuts import render
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_GET
 
-ASSETS = ("scanner/app.js", "scanner/app.css", "scanner/icon.svg")
+# Everything the service worker caches as the app shell; any change here bumps the build id.
+ASSETS = (
+    "scanner/app.js",
+    "scanner/app.css",
+    "brand/tokens.css",
+    "brand/fonts/inter-latin-wght.woff2",
+    "brand/fonts/space-grotesk-latin-600.woff2",
+    "brand/fonts/jetbrains-mono-latin-500.woff2",
+    "brand/favicon.svg",
+    "brand/mark-simple.svg",
+)
 
 CSP = "; ".join(
     [
@@ -44,7 +54,7 @@ def build_id() -> str:
 
 
 def _context() -> dict:
-    return {"build_id": build_id(), "csrf_cookie_name": settings.CSRF_COOKIE_NAME}
+    return {"build_id": build_id(), "csrf_cookie_name": settings.CSRF_COOKIE_NAME, "assets": ASSETS}
 
 
 @require_GET
