@@ -13,7 +13,7 @@
   const FULL_PULL_EVERY_MS = 24 * 3600 * 1000;
   const PUSH_BATCH = 50;
   const HISTORY_SIZE = 100;
-  const CLOSED = new Set(["closed", "cancelled", "done", "posted", "rejected", "awaiting_approval"]);
+  const CLOSED = new Set(["closed", "cancelled", "done", "short", "posted", "rejected", "awaiting_approval"]);
 
   const app = document.getElementById("app");
   const statusEl = document.getElementById("status");
@@ -124,7 +124,7 @@
   };
 
   function emptyRef() {
-    return { locations: new Map(), items: new Map(), notices: new Map(), tasks: new Map(), counts: new Map() };
+    return { locations: new Map(), items: new Map(), notices: new Map(), tasks: new Map(), pick_tasks: new Map(), counts: new Map() };
   }
 
   function uuid4() {
@@ -146,7 +146,7 @@
     state.lastFull = 0;
     const saved = state.siteId && (await db.get(`ref:${state.siteId}`));
     if (!saved) return;
-    for (const [kind, rows] of Object.entries(saved.ref)) for (const row of rows) state.ref[kind].set(row.id, row);
+    for (const [kind, rows] of Object.entries(saved.ref)) if (state.ref[kind]) for (const row of rows) state.ref[kind].set(row.id, row);
     state.cursor = saved.cursor;
     state.lastFull = saved.lastFull;
   }
@@ -257,7 +257,7 @@
     const data = res.data;
     if (data.full) state.ref = emptyRef();
     for (const kind of Object.keys(state.ref)) {
-      for (const row of data[kind]) {
+      for (const row of data[kind] || []) {
         const gone = row.is_active === false || CLOSED.has(row.status);
         if (gone) state.ref[kind].delete(row.id);
         else state.ref[kind].set(row.id, row);
@@ -467,6 +467,7 @@
         { class: "tiles" },
         h("a", { class: "tile", href: "#receive" }, "Receive"),
         h("a", { class: "tile", href: "#putaway" }, `Put away (${openTasks().length})`),
+        h("a", { class: "tile", href: "#pick" }, `Pick (${openPicks().length})`),
         h("a", { class: "tile", href: "#count" }, `Count (${state.ref.counts.size})`),
         h("a", { class: "tile", href: "#move" }, "Move"),
       ),
@@ -620,6 +621,90 @@
       task.lot ? h("p", { class: "muted" }, `Lot ${task.lot}${task.expiry ? ` · expires ${task.expiry}` : ""}`) : null,
       form,
       h("div", { class: "actions" }, back("#putaway")),
+    );
+  }
+
+  // Picking walks the pick path: tasks sorted by bin sequence, one scan of bin and item each. A quantity below
+  // the task's is a short pick and needs a reason; the server then looks for the rest in other bins.
+  function openPicks() {
+    const sent = new Set(state.queue.filter((c) => (c.type === "pick.confirm" || c.type === "pick.short") && c.state === "pending").map((c) => c.payload.task_id));
+    return [...state.ref.pick_tasks.values()]
+      .filter((t) => !sent.has(t.id) && (!t.assigned_to || t.assigned_to === state.session.user_id))
+      .sort((a, b) => a.pick_sequence - b.pick_sequence || a.from_location.localeCompare(b.from_location) || a.wave_number.localeCompare(b.wave_number));
+  }
+
+  function viewPickList() {
+    const picks = openPicks();
+    show(
+      h("h1", {}, "Pick"),
+      flash(),
+      h(
+        "ul",
+        { class: "list" },
+        picks.map((t) =>
+          h("li", {}, h("a", { href: `#pick/${t.id}` }, h("strong", {}, `${t.from_location} · ${Number(t.qty)} × ${t.sku}`), h("div", { class: "muted" }, `${t.wave_number}${t.lot ? ` · lot ${t.lot}` : ""}`))),
+        ),
+      ),
+      picks.length ? null : h("p", { class: "muted" }, "Nothing to pick."),
+      h("div", { class: "actions" }, back()),
+    );
+  }
+
+  function viewPick(taskId) {
+    const task = state.ref.pick_tasks.get(taskId);
+    if (!task) return viewPickList();
+    const wanted = Number(task.qty);
+    const where = h("input", { autocomplete: "off", autocapitalize: "characters", placeholder: "Scan bin", autofocus: true });
+    const what = h("input", { autocomplete: "off", autocapitalize: "characters", placeholder: "Scan item barcode or SKU" });
+    const qty = h("input", { inputmode: "decimal", placeholder: String(wanted), required: true });
+    const reason = h("input", { autocomplete: "off", placeholder: "Why is it short?" });
+    const reasonRow = h("div", { hidden: true }, field("Short pick reason", reason));
+    qty.addEventListener("input", () => {
+      reasonRow.hidden = !(qty.value.trim() !== "" && Number(qty.value) < wanted);
+    });
+    const form = scanFlow(
+      h(
+        "form",
+        {
+          onsubmit: guarded(async () => {
+            const code = where.value.trim().toUpperCase();
+            if (code !== task.from_location) throw new Error(`Wrong bin: this pick is from ${task.from_location}.`);
+            const found = Number(qty.value);
+            if (qty.value.trim() === "" || !(found >= 0)) throw new Error("Enter the quantity picked.");
+            if (found > wanted) throw new Error(`This pick is ${wanted}. Leave the rest in the bin.`);
+            if (found > 0 && !findItems(what.value, task.client_id).some((hit) => hit.item.id === task.item_id)) {
+              throw new Error(`That is not ${task.sku}.`);
+            }
+            if (!task.assigned_to) await enqueue("pick.claim", { task_id: taskId }, `Claim pick ${task.sku}`);
+            if (found === wanted) {
+              const summary = `Picked ${wanted} ${task.sku} from ${code}`;
+              await enqueue("pick.confirm", { task_id: taskId, location_code: code, item_code: what.value.trim(), qty: qty.value.trim() }, summary);
+              say(summary);
+            } else {
+              if (!reason.value.trim()) throw new Error("Say why the pick is short.");
+              const summary = `Short pick ${found} of ${wanted} ${task.sku} from ${code}`;
+              await enqueue("pick.short", { task_id: taskId, location_code: code, qty_found: qty.value.trim(), reason: reason.value.trim() }, summary);
+              say(summary, "bad");
+            }
+            const next = openPicks()[0];
+            location.hash = next ? `#pick/${next.id}` : "#pick";
+          }),
+        },
+        field("Bin", where),
+        field("Item", what),
+        field("Quantity picked", qty),
+        reasonRow,
+        h("div", { class: "actions" }, h("button", { type: "submit" }, "Confirm pick")),
+      ),
+    );
+    show(
+      h("h1", {}, `${task.from_location}`),
+      flash(),
+      h("p", {}, h("strong", {}, `Pick ${wanted} × ${task.sku}`)),
+      task.lot ? h("p", { class: "muted" }, `Lot ${task.lot}${task.expiry ? ` · expires ${task.expiry}` : ""}`) : null,
+      h("p", { class: "muted" }, task.wave_number),
+      form,
+      h("div", { class: "actions" }, back("#pick")),
     );
   }
 
@@ -804,6 +889,8 @@
         return id ? viewReceive(id) : viewReceiveList();
       case "putaway":
         return id ? viewPutaway(id) : viewPutawayList();
+      case "pick":
+        return id ? viewPick(id) : viewPickList();
       case "count":
         return id ? viewCount(id) : viewCountList();
       case "move":

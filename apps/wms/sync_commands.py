@@ -87,3 +87,28 @@ def count_line(request, cmd: CountLineCommand, command_id: uuid.UUID) -> dict:
 @sync.command("inventory.move", api.MoveIn)
 def inventory_move(request, cmd: api.MoveIn, command_id: uuid.UUID) -> dict:
     return _out(api.MovementOut, api.move_stock(request, _with_command(cmd, command_id)))
+
+
+class PickConfirmCommand(api.PickConfirmIn):
+    task_id: uuid.UUID
+
+
+class PickShortCommand(api.PickShortIn):
+    task_id: uuid.UUID
+
+
+@sync.command("pick.claim", TaskCommand)
+def pick_claim(request, cmd: TaskCommand, command_id: uuid.UUID) -> dict:
+    return _out(api.PickTaskOut, api.claim_task(request, cmd.task_id))
+
+
+@sync.command("pick.confirm", PickConfirmCommand)
+def pick_confirm(request, cmd: PickConfirmCommand, command_id: uuid.UUID) -> dict:
+    body = api.PickConfirmIn(**cmd.model_dump(exclude={"task_id"}))
+    return _out(api.PickTaskOut, api.confirm_pick(request, cmd.task_id, _with_command(body, command_id)))
+
+
+@sync.command("pick.short", PickShortCommand)
+def pick_short(request, cmd: PickShortCommand, command_id: uuid.UUID) -> dict:
+    body = api.PickShortIn(**cmd.model_dump(exclude={"task_id"}))
+    return _out(api.PickTaskOut, api.short_pick(request, cmd.task_id, _with_command(body, command_id)))

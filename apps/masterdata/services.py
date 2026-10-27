@@ -12,6 +12,7 @@ from django.utils import timezone
 from apps.platform import audit, outbox
 from apps.platform.apiutils import Problem
 from apps.platform.context import current_actor
+from apps.platform.numbers import next_number
 
 from .models import (
     Contract,
@@ -23,6 +24,8 @@ from .models import (
     RateCard,
     RateCardStatus,
     RateLine,
+    Site,
+    SiteKind,
 )
 
 # --- Parties -------------------------------------------------------------------------------------------
@@ -73,6 +76,49 @@ def create_party(
             payload={"party_id": str(party.pk), "code": party.code, "legal_name": party.legal_name},
         )
     return party
+
+
+# --- Delivery addresses -----------------------------------------------------------------------------------
+
+
+def client_delivery_address(client_id: uuid.UUID, code: str) -> Site:
+    """An active delivery address that belongs to this client."""
+    site = Site.objects.filter(
+        code=code.strip().upper(), kind=SiteKind.DELIVERY_ADDRESS, party_id=client_id, is_active=True
+    ).first()
+    if site is None:
+        raise Problem(422, "Unknown delivery address", f"No delivery address {code!r} for this client.")
+    return site
+
+
+@transaction.atomic
+def ensure_delivery_address(
+    client_id: uuid.UUID,
+    *,
+    name: str,
+    address: str,
+    latitude: Decimal | None = None,
+    longitude: Decimal | None = None,
+) -> Site:
+    """Reuse this client's delivery address with the same name and address, or create one with a generated
+    code. Lets client systems send a consignee inline instead of maintaining an address book."""
+    name, address = " ".join(name.split()), address.strip()
+    if not name or not address:
+        raise Problem(422, "Delivery address incomplete", "A delivery address needs a name and an address.")
+    existing = Site.objects.filter(
+        kind=SiteKind.DELIVERY_ADDRESS, party_id=client_id, is_active=True, name__iexact=name, address__iexact=address
+    ).first()
+    if existing is not None:
+        return existing
+    return Site.objects.create(
+        code=next_number("delivery_address", "DA"),
+        name=name[:120],
+        kind=SiteKind.DELIVERY_ADDRESS,
+        party_id=client_id,
+        address=address,
+        latitude=latitude,
+        longitude=longitude,
+    )
 
 
 def update_with_version(instance, expected_version: int, changes: dict) -> None:

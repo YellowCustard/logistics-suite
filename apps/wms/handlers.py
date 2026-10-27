@@ -1,11 +1,13 @@
 """Outbox consumers owned by the warehouse module."""
 
+import uuid
 from decimal import Decimal
 
 from apps.platform import exceptions_queue
 from apps.platform.models import Severity
 from apps.platform.outbox import Event, subscribe
 
+from . import allocation
 from .adjustments import needs_approval
 
 
@@ -28,3 +30,13 @@ def review_large_adjustment(event: Event) -> None:
         entity_id=payload["movement_id"],
         dedupe_key=f"inventory.adjustment_review:{payload['movement_id']}",
     )
+
+
+@subscribe("oms.sales_order.accepted", consumer="wms.allocate_order")
+def allocate_order(event: Event) -> None:
+    allocation.allocate_order(uuid.UUID(event.payload["sales_order_id"]))
+
+
+@subscribe("oms.sales_order.cancelled", consumer="wms.release_order")
+def release_order(event: Event) -> None:
+    allocation.release_order(uuid.UUID(event.payload["sales_order_id"]))
