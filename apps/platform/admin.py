@@ -1,7 +1,7 @@
 from django.contrib import admin, messages
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 
-from . import outbox
+from . import outbox, webhooks
 from .models import (
     ApiClient,
     AuditEntry,
@@ -12,6 +12,8 @@ from .models import (
     OutboxEvent,
     RoleGrant,
     User,
+    WebhookDelivery,
+    WebhookSubscription,
 )
 
 
@@ -105,3 +107,25 @@ class ExceptionCaseAdmin(admin.ModelAdmin):
     list_filter = ["status", "severity", "kind"]
     search_fields = ["summary", "entity_id"]
     readonly_fields = ["kind", "detail", "entity_type", "entity_id", "dedupe_key", "resolved_at"]
+
+
+@admin.register(WebhookSubscription)
+class WebhookSubscriptionAdmin(ReadOnlyAdmin):
+    list_display = ["url", "client_id", "is_active", "created_at", "created_by"]
+    list_filter = ["is_active"]
+    exclude = ["secret"]
+
+
+@admin.register(WebhookDelivery)
+class WebhookDeliveryAdmin(ReadOnlyAdmin):
+    list_display = ["event", "subscription", "status", "attempts", "last_status_code", "next_attempt_at"]
+    list_filter = ["status"]
+    actions = ["requeue_selected"]
+
+    @admin.action(description="Send selected dead deliveries again")
+    def requeue_selected(self, request, queryset):
+        count = sum(webhooks.requeue(pk) for pk in queryset.values_list("pk", flat=True))
+        self.message_user(request, f"Queued {count} dead deliveries.", messages.SUCCESS)
+
+    def has_change_permission(self, request, obj=None):  # needed for actions
+        return request.user.is_superuser

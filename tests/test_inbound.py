@@ -154,7 +154,8 @@ def test_full_receipt_posts_stock_creates_putaway_and_closes_the_asn(world, bear
 
     event = OutboxEvent.objects.get(type="wms.receipt.completed")
     assert event.payload["variance"] == [] and len(event.payload["lines"]) == 2
-    assert _deliver_events().delivered == 1
+    stats = _deliver_events()  # the ASN closer plus webhook fan-out for this and the ASN events
+    assert stats.delivered >= 1 and stats.dead == 0 and stats.retried == 0
     closed = InboundNotice.objects.get(pk=notice["id"])
     assert closed.status == "closed"
     assert closed.lines.get().qty_received == D("10")

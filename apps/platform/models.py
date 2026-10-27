@@ -3,6 +3,7 @@ from django.contrib.postgres.fields import ArrayField
 from django.db import models
 from django.db.models import Q
 
+from .fields import EncryptedTextField
 from .ids import uuid7
 
 
@@ -368,3 +369,59 @@ class NumberSequence(models.Model):
 
     def __str__(self) -> str:
         return f"{self.prefix} {self.year} → {self.next_value}"
+
+
+# --- Outbound webhooks ---------------------------------------------------------------------------------
+
+
+class WebhookSubscription(Audited, BaseModel):
+    """A client system's HTTPS endpoint for selected events about that client. Each delivery is signed with
+    the subscription's secret (HMAC-SHA256), which is shown once when the subscription is created."""
+
+    client_id = models.UUIDField(help_text="masterdata.Party (platform imports no business module)")
+    url = models.URLField(max_length=500)
+    event_types = ArrayField(models.CharField(max_length=120))
+    secret = EncryptedTextField()
+    description = models.CharField(max_length=200, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_by = models.CharField(max_length=80, blank=True, help_text="Principal that created it")
+
+    audit_exclude_fields = ("updated_at", "version", "secret")
+
+    class Meta:
+        indexes = [models.Index(fields=["client_id"], name="webhook_client_idx", condition=Q(is_active=True))]
+
+    def __str__(self) -> str:
+        return f"{self.client_id} → {self.url}"
+
+
+class WebhookDeliveryStatus(models.TextChoices):
+    PENDING = "pending"
+    DELIVERED = "delivered"
+    DEAD = "dead"
+
+
+class WebhookDelivery(models.Model):
+    """One event sent to one subscription. Retried with backoff until delivered or dead."""
+
+    id = models.UUIDField(primary_key=True, default=uuid7, editable=False)
+    subscription = models.ForeignKey(WebhookSubscription, on_delete=models.CASCADE, related_name="deliveries")
+    event = models.ForeignKey(OutboxEvent, on_delete=models.PROTECT, related_name="+")
+    status = models.CharField(
+        max_length=20, choices=WebhookDeliveryStatus.choices, default=WebhookDeliveryStatus.PENDING
+    )
+    attempts = models.PositiveIntegerField(default=0)
+    next_attempt_at = models.DateTimeField()
+    last_status_code = models.PositiveSmallIntegerField(null=True, blank=True)
+    last_error = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["subscription", "event"], name="webhook_delivery_sub_event_uq")]
+        indexes = [
+            models.Index(fields=["next_attempt_at"], name="webhook_due_idx", condition=Q(status="pending")),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.event_id} → {self.subscription_id} ({self.status})"

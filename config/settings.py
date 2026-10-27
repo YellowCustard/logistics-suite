@@ -143,6 +143,12 @@ LOGIN_RATE_LIMIT = env("LOGIN_RATE_LIMIT", "10/m")
 # is not missed. Devices upsert by id, so overlap costs only bandwidth.
 SYNC_PULL_OVERLAP_SECONDS = int(env("SYNC_PULL_OVERLAP_SECONDS", "300"))
 INVENTORY_VARIANCE_APPROVAL_PCT = float(env("INVENTORY_VARIANCE_APPROVAL_PCT", "2"))
+# Outbound webhooks to client systems. The two ALLOW flags exist for local testing only: never set them on a
+# server, because they let webhooks reach internal addresses.
+WEBHOOK_TIMEOUT_SECONDS = float(env("WEBHOOK_TIMEOUT_SECONDS", "10"))
+WEBHOOK_MAX_ATTEMPTS = int(env("WEBHOOK_MAX_ATTEMPTS", "10"))
+WEBHOOK_ALLOW_INSECURE = env_bool("WEBHOOK_ALLOW_INSECURE", False)
+WEBHOOK_ALLOW_PRIVATE_NETWORKS = env_bool("WEBHOOK_ALLOW_PRIVATE_NETWORKS", False)
 # Endpoints that authenticate or deduplicate differently (token grant, vendor webhooks, offline sync).
 IDEMPOTENCY_EXEMPT_PREFIXES = ["/api/v1/auth/", "/api/v1/integrations/", "/api/v1/sync/"]
 
