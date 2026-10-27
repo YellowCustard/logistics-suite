@@ -72,6 +72,9 @@ and a firewall (SSH, 80, 443 only), creates a `deploy` user with your SSH key, s
 `backup.env` with generated secrets (mode 600), installs the nightly timers, and runs the first deploy.
 It is safe to re-run.
 
+`.env` starts with the test SSCC prefix `GS1_COMPANY_PREFIX=0000000`. Once you have a GS1 South Africa company
+prefix, put it there and redeploy; labels printed before that are for testing only.
+
 **Copy `/opt/logistics/.env` and `/opt/logistics/backup.env` into a password manager immediately.**
 Losing `FIELD_ENCRYPTION_KEYS` makes encrypted ID and phone numbers unreadable; losing `RESTIC_PASSWORD`
 makes every backup unreadable.
