@@ -19,3 +19,9 @@ def record_allocation(event: Event) -> None:
     services.record_allocation(
         uuid.UUID(event.payload["sales_order_id"]), fully_allocated=bool(event.payload["fully_allocated"])
     )
+
+
+@subscribe("wms.handling_unit.closed", consumer="oms.record_packed")
+def record_packed(event: Event) -> None:
+    if event.payload.get("order_fully_packed"):
+        services.record_packed(uuid.UUID(event.payload["sales_order_id"]))

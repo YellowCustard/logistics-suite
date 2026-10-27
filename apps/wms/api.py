@@ -1,11 +1,11 @@
 import uuid
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Literal
 
 from django.conf import settings
 from django.db.models import F, Q, QuerySet
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.utils import timezone
 from ninja import File, Router, Schema, Status
 from ninja.files import UploadedFile
@@ -19,12 +19,15 @@ from apps.platform.apiutils import Problem, get_scoped, paginate, principal_of, 
 from apps.platform.auth import Principal
 from apps.platform.models import Role
 
-from . import adjustments, allocation, counting, picking, putaway, receiving
+from . import adjustments, allocation, counting, labels, packing, picking, putaway, receiving
 from .models import (
     Allocation,
     Condition,
     CountStatus,
     CycleCount,
+    HandlingUnit,
+    HandlingUnitKind,
+    HandlingUnitStatus,
     InventoryBalance,
     Location,
     LocationKind,
@@ -1081,3 +1084,206 @@ def short_pick(request, task_id: uuid.UUID, body: PickShortIn):
         command_id=body.command_id,
     )
     return _pick_tasks(principal).get(pk=task.pk)
+
+
+# --- Packing ------------------------------------------------------------------------------------------------------
+
+
+class HandlingUnitIn(Schema):
+    sales_order_id: uuid.UUID
+    kind: HandlingUnitKind
+
+
+class PackIn(Schema):
+    item_code: str = Field(description="Item barcode or SKU, as scanned")
+    qty: Decimal = Field(gt=0, description="Base units")
+    lot: str = ""
+
+
+class CloseUnitIn(Schema):
+    weight_kg: Decimal = Field(gt=0, max_digits=10, decimal_places=3)
+    cartons: int | None = Field(None, gt=0, description="Defaults to 1 for a carton; required for a pallet")
+    volume_m3: Decimal | None = Field(None, gt=0, max_digits=10, decimal_places=4)
+
+
+class ContentOut(Schema):
+    id: uuid.UUID
+    order_line_id: uuid.UUID
+    item_id: uuid.UUID
+    sku: str
+    lot: str
+    expiry: date | None
+    qty: Decimal
+
+    @staticmethod
+    def resolve_sku(obj):
+        return obj.item.sku
+
+
+class HandlingUnitOut(Schema):
+    id: uuid.UUID
+    sscc: str
+    kind: str
+    status: str
+    client_id: uuid.UUID
+    site_id: uuid.UUID
+    sales_order_id: uuid.UUID
+    order_number: str
+    weight_kg: Decimal | None
+    volume_m3: Decimal | None
+    cartons: int | None
+    closed_at: datetime | None
+    contents: list[ContentOut]
+
+    @staticmethod
+    def resolve_contents(obj: HandlingUnit):
+        return list(obj.contents.select_related("item").order_by("created_at"))
+
+
+class HandlingUnitPage(Schema):
+    items: list[HandlingUnitOut]
+    next_cursor: uuid.UUID | None
+
+
+class PackLineOut(Schema):
+    order_line_id: uuid.UUID
+    item_id: uuid.UUID
+    sku: str
+    lot: str
+    picked: Decimal
+    packed: Decimal
+    remaining: Decimal
+
+
+class PackOrderOut(Schema):
+    sales_order_id: uuid.UUID
+    number: str
+    client_id: uuid.UUID
+    picking_done: bool
+    lines: list[PackLineOut]
+    open_units: list[HandlingUnitOut]
+
+
+def _units(principal: Principal) -> QuerySet:
+    return _staff_scoped(principal, HandlingUnit.objects.all())
+
+
+def _unit_for_operator(principal: Principal, unit_id: uuid.UUID) -> HandlingUnit:
+    require_roles(principal, *OPERATORS)
+    return get_scoped(_units(principal), unit_id)
+
+
+@router.get("/pack-orders", response=list[PackOrderOut])
+def list_pack_orders(request, site_id: uuid.UUID):
+    """The packing bench: orders at a site with picked stock not yet in a closed handling unit."""
+    principal = principal_of(request)
+    require_roles(principal, *OPERATORS)
+    site = _site(principal, site_id)
+    client_ids = None if principal.all_clients else principal.client_ids
+    result = []
+    for wave_order in packing.orders_to_pack(site.pk, client_ids):
+        rows = packing.packable(wave_order.sales_order_id)
+        skus = dict(Item.objects.filter(pk__in={r.item_id for r in rows}).values_list("pk", "sku"))
+        result.append(
+            {
+                "sales_order_id": wave_order.sales_order_id,
+                "number": wave_order.number,
+                "client_id": wave_order.client_id,
+                "picking_done": not PickTask.objects.filter(
+                    sales_order_id=wave_order.sales_order_id,
+                    status__in=[PickTaskStatus.OPEN, PickTaskStatus.CLAIMED],
+                ).exists(),
+                "lines": [
+                    {
+                        "order_line_id": r.order_line_id,
+                        "item_id": r.item_id,
+                        "sku": skus.get(r.item_id, ""),
+                        "lot": r.lot,
+                        "picked": r.picked,
+                        "packed": r.packed,
+                        "remaining": r.remaining,
+                    }
+                    for r in rows
+                ],
+                "open_units": list(
+                    _units(principal).filter(sales_order_id=wave_order.sales_order_id, status=HandlingUnitStatus.OPEN)
+                ),
+            }
+        )
+    return result
+
+
+@router.post("/handling-units", response={201: HandlingUnitOut})
+def open_handling_unit(request, body: HandlingUnitIn):
+    """Start a pallet or carton for an order in picking. It gets its SSCC now."""
+    principal = principal_of(request)
+    require_staff(principal)
+    require_roles(principal, *OPERATORS)
+    order = oms.order_summary(body.sales_order_id)
+    if order is None or not principal.can_see_client(order.client_id) or not principal.can_see_site(order.site_id):
+        raise Problem(404, "Not found")
+    unit = packing.open_unit(order_id=order.sales_order_id, kind=body.kind, created_by=principal.id)
+    return Status(201, unit)
+
+
+@router.get("/handling-units", response=HandlingUnitPage)
+def list_handling_units(
+    request,
+    sales_order_id: uuid.UUID | None = None,
+    sscc: str | None = None,
+    status: HandlingUnitStatus | None = None,
+    cursor: uuid.UUID | None = None,
+    limit: int = 50,
+):
+    qs = _units(principal_of(request))
+    if sales_order_id:
+        qs = qs.filter(sales_order_id=sales_order_id)
+    if sscc:
+        digits = "".join(ch for ch in sscc if ch.isdigit())  # accepts "(00) …" and a scanned "00…" too
+        qs = qs.filter(sscc=digits[2:] if len(digits) == 20 and digits.startswith("00") else digits)
+    if status:
+        qs = qs.filter(status=status)
+    items, next_cursor = paginate(qs, cursor, limit)
+    return {"items": items, "next_cursor": next_cursor}
+
+
+@router.get("/handling-units/{unit_id}", response=HandlingUnitOut)
+def get_handling_unit(request, unit_id: uuid.UUID):
+    return get_scoped(_units(principal_of(request)), unit_id)
+
+
+@router.post("/handling-units/{unit_id}/contents", response={201: HandlingUnitOut})
+def pack_into_unit(request, unit_id: uuid.UUID, body: PackIn):
+    unit = _unit_for_operator(principal_of(request), unit_id)
+    return Status(201, packing.add(unit.pk, item_code=body.item_code, qty=body.qty, lot=body.lot))
+
+
+@router.delete("/handling-units/{unit_id}/contents/{content_id}", response=HandlingUnitOut)
+def unpack_from_unit(request, unit_id: uuid.UUID, content_id: uuid.UUID):
+    """Take a line back out of an open unit (a packing mistake). Closed units can't change."""
+    unit = _unit_for_operator(principal_of(request), unit_id)
+    return packing.remove(unit.pk, content_id)
+
+
+@router.post("/handling-units/{unit_id}/close", response=HandlingUnitOut)
+def close_handling_unit(request, unit_id: uuid.UUID, body: CloseUnitIn):
+    principal = principal_of(request)
+    unit = _unit_for_operator(principal, unit_id)
+    return packing.close(
+        unit.pk, weight_kg=body.weight_kg, cartons=body.cartons, volume_m3=body.volume_m3, closed_by=principal.id
+    )
+
+
+@router.get("/handling-units/{unit_id}/label")
+def handling_unit_label(request, unit_id: uuid.UUID, format: Literal["pdf", "zpl"] = "pdf"):
+    """The SSCC label: a 4x6 inch PDF for any printer, or ZPL for a Zebra printer."""
+    unit = get_scoped(_units(principal_of(request)), unit_id)
+    data = packing.label_for(unit)
+    if format == "zpl":
+        response = HttpResponse(labels.zpl(data), content_type="text/plain; charset=utf-8")
+        response["Content-Disposition"] = f'inline; filename="{unit.sscc}.zpl"'
+    else:
+        response = HttpResponse(labels.pdf(data), content_type="application/pdf")
+        response["Content-Disposition"] = f'inline; filename="{unit.sscc}.pdf"'
+    response["Cache-Control"] = "private, no-store"
+    return response
