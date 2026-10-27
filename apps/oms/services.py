@@ -459,6 +459,20 @@ def record_allocation(order_id: uuid.UUID, *, fully_allocated: bool) -> SalesOrd
     return order
 
 
+def begin_picking(order_ids: list[uuid.UUID]) -> list[uuid.UUID]:
+    """Called by WMS when it releases a wave: move fully allocated orders to picking, after which they can't
+    be cancelled. Returns the ids that moved; orders cancelled or short meanwhile are left out."""
+    if not transaction.get_connection().in_atomic_block:
+        raise RuntimeError("begin_picking() must run inside the wave release transaction")
+    started = []
+    for order in SalesOrder.objects.select_for_update().filter(pk__in=order_ids).order_by("pk"):
+        if order.status == OrderStatus.ALLOCATED:
+            order.status = OrderStatus.PICKING
+            order.save()
+            started.append(order.pk)
+    return started
+
+
 @dataclass(frozen=True, slots=True)
 class OrderSummary:
     sales_order_id: uuid.UUID

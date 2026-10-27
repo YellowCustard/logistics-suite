@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 
 from django.db import transaction
-from django.db.models import DecimalField, F, OuterRef, Q, Subquery, Sum, Value
+from django.db.models import Case, DecimalField, F, OuterRef, Q, Subquery, Sum, Value, When
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 
@@ -21,6 +21,7 @@ from apps.platform.models import ExceptionCase, ExceptionStatus, Severity
 from . import ledger
 from .models import (
     ACTIVE_ALLOCATION,
+    QTY_STEP,
     Allocation,
     AllocationStatus,
     InventoryBalance,
@@ -78,11 +79,58 @@ def candidates(*, client_id: uuid.UUID, site_id: uuid.UUID, item_id: uuid.UUID):
     )
 
 
-def _allocated(order_line_id: uuid.UUID) -> Decimal:
-    total = Allocation.objects.filter(order_line_id=order_line_id, status__in=ACTIVE_ALLOCATION).aggregate(
-        total=Sum("qty_allocated")
+def covered(order_line_id: uuid.UUID) -> Decimal:
+    """How much of an order line is reserved or already picked. A shorted allocation counts only what was
+    actually found."""
+    total = Allocation.objects.filter(
+        order_line_id=order_line_id, status__in=(*ACTIVE_ALLOCATION, AllocationStatus.SHORT)
+    ).aggregate(
+        total=Sum(
+            Case(
+                When(status=AllocationStatus.SHORT, then=F("qty_picked")),
+                default=F("qty_allocated"),
+                output_field=DecimalField(max_digits=14, decimal_places=3),
+            )
+        )
     )["total"]
-    return total or Decimal(0)
+    return (total or Decimal(0)).quantize(QTY_STEP)
+
+
+def top_up_line(
+    order: oms.OrderToAllocate,
+    line: oms.OpenOrderLine,
+    *,
+    status: str = AllocationStatus.RESERVED,
+    pick_wave_id: uuid.UUID | None = None,
+    exclude_balance_ids: tuple[uuid.UUID, ...] = (),
+) -> tuple[Decimal, list[Allocation]]:
+    """Reserve what one line still lacks. Returns how much the line now has and the allocations created."""
+    have = covered(line.line_id)
+    need = line.base_qty - have
+    created: list[Allocation] = []
+    if need <= 0:
+        return have, created
+    pool = candidates(client_id=order.client_id, site_id=order.site_id, item_id=line.item_id)
+    for balance in pool.exclude(pk__in=exclude_balance_ids):
+        taken = ledger.reserve_available(balance.pk, need)
+        if taken <= 0:
+            continue
+        created.append(
+            Allocation.objects.create(
+                client_id=order.client_id,
+                site_id=order.site_id,
+                sales_order_id=order.sales_order_id,
+                order_line_id=line.line_id,
+                balance_id=balance.pk,
+                qty_allocated=taken,
+                status=status,
+                pick_wave_id=pick_wave_id,
+            )
+        )
+        have, need = have + taken, need - taken
+        if need <= 0:
+            break
+    return have, created
 
 
 @transaction.atomic
@@ -94,24 +142,7 @@ def allocate_order(order_id: uuid.UUID) -> OrderResult | None:
         return None
     result = OrderResult(order.sales_order_id, order.number)
     for line in order.lines:
-        have = _allocated(line.line_id)
-        need = line.base_qty - have
-        if need > 0:
-            for balance in candidates(client_id=order.client_id, site_id=order.site_id, item_id=line.item_id):
-                taken = ledger.reserve_available(balance.pk, need)
-                if taken <= 0:
-                    continue
-                Allocation.objects.create(
-                    client_id=order.client_id,
-                    site_id=order.site_id,
-                    sales_order_id=order.sales_order_id,
-                    order_line_id=line.line_id,
-                    balance_id=balance.pk,
-                    qty_allocated=taken,
-                )
-                have, need = have + taken, need - taken
-                if need <= 0:
-                    break
+        have, _ = top_up_line(order, line)
         result.lines.append(LineResult(line.line_id, line.item_id, line.base_qty, have))
     _publish(order, result)
     return result
@@ -148,17 +179,7 @@ def _publish(order: oms.OrderToAllocate, result: OrderResult) -> None:
         return
     short = [line for line in result.lines if line.short > 0]
     for line in short:
-        outbox.emit(
-            "wms.allocation.shorted",
-            payload={
-                "sales_order_id": str(order.sales_order_id),
-                "order_line_id": str(line.order_line_id),
-                "item_id": str(line.item_id),
-                "qty_requested": str(line.qty_requested),
-                "qty_allocated": str(line.qty_allocated),
-            },
-            **envelope,
-        )
+        emit_shorted(order, line)
     exceptions_queue.raise_case(
         kind="allocation.short",
         severity=Severity.MEDIUM,
@@ -169,6 +190,23 @@ def _publish(order: oms.OrderToAllocate, result: OrderResult) -> None:
         entity_type="oms.sales_order",
         entity_id=str(order.sales_order_id),
         dedupe_key=dedupe_key,
+    )
+
+
+def emit_shorted(order: oms.OrderToAllocate, line: LineResult) -> None:
+    outbox.emit(
+        "wms.allocation.shorted",
+        aggregate_type="oms.sales_order",
+        aggregate_id=order.sales_order_id,
+        client_id=order.client_id,
+        site_id=order.site_id,
+        payload={
+            "sales_order_id": str(order.sales_order_id),
+            "order_line_id": str(line.order_line_id),
+            "item_id": str(line.item_id),
+            "qty_requested": str(line.qty_requested),
+            "qty_allocated": str(line.qty_allocated),
+        },
     )
 
 

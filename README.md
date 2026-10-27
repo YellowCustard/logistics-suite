@@ -12,7 +12,7 @@ putaway).
 | `apps/platform` | Bottom layer: users and roles, principals and scoping, API tokens, audit log, transactional outbox, idempotency, documents, exception queue, business numbers, CSV import engine |
 | `apps/masterdata` | Clients and other parties, sites, items (UoMs, barcodes), vehicles, drivers, contracts, versioned rate cards |
 | `apps/oms` | Inbound notices (ASNs and returns) and outbound sales orders (API, CSV import, cancellation) |
-| `apps/wms` | Bins, receiving, the inventory ledger (`ledger.py`, the only code that changes stock), putaway, allocation (`allocation.py`, FEFO then FIFO). Picking arrives next in M2 |
+| `apps/wms` | Bins, receiving, the inventory ledger (`ledger.py`, the only code that changes stock), putaway, allocation (`allocation.py`, FEFO then FIFO), waves and picking (`picking.py`). Packing arrives next in M2 |
 | `config` | Settings (environment-driven), URLs, API root |
 | `tests` | pytest suite against real PostgreSQL, including the M0 exit test |
 
@@ -75,10 +75,11 @@ CI (`.github/workflows/ci.yml`) runs all of the above plus `check --deploy` and 
 | Idempotency cleanup | Schedule `manage.py purge_idempotency` daily (cron or a scheduled container run). |
 | Encryption key rotation | Generate a key, put it **first** in `FIELD_ENCRYPTION_KEYS`, keep the old ones after it, deploy. Old values still decrypt and are re-encrypted on their next save. Never drop a key while rows may still use it. |
 | Inventory reconciliation | Schedule `manage.py reconcile_inventory` nightly. It compares every balance with its movement ledger and opens a critical `inventory.ledger_drift` case on any difference, and checks each balance's allocated quantity against its open allocations (`inventory.allocation_drift`). |
+| Waves and picking | A supervisor plans a wave from allocated orders (`POST /waves`, up to 200) and releases it (`POST /waves/{id}/release`). Release moves the orders to `picking` (no more cancellation), drops any that were cancelled or went short since planning, and creates one pick task per allocation. Operators pick on the scanner in bin order: scan bin, scan item, confirm the quantity. A short pick (`POST /pick-tasks/{id}/short`, reason required) takes what was found, looks for the rest in other bins and adds those tasks to the same wave; if nothing is left it emits `wms.allocation.shorted` and opens a high `pick.short` case. Every short also opens an `inventory.short_pick` case to count that bin. The wave completes when every task is done or short (`wms.pick_wave.completed`). |
 | Allocation | Every accepted order allocates at once: available stock in storage and pick-face bins only, earliest expiry first, then oldest arrival, then pick path. Expired, quarantined and dock stock is never allocated. A short order keeps what it got, becomes `backordered`, emits `wms.allocation.shorted` and opens one `allocation.short` case. After new stock is put away, a supervisor tops backorders up with `POST /allocations:run` (`site_id`, optional `sales_order_ids`); the case resolves when the order is full. Cancelling an order releases its reservations. |
 | Cycle counts | A supervisor opens a count on a set of bins (`POST /cycle-counts`). Operators scan what they find; they see only their own lines, never system quantities. Uncounted stock in those bins counts as zero on submit. Variances within `INVENTORY_VARIANCE_APPROVAL_PCT` (default 2%) post at once; anything larger, or any stock found in an empty bin, waits for a site manager who neither counted nor submitted it. |
 | Stock corrections | `POST /inventory/adjustments` (supervisors, reason required) posts immediately. A correction over the same threshold opens an `inventory.adjustment_review` case so a site manager reviews it after the fact. Every adjustment emits `wms.inventory.adjusted`. Bin-to-bin moves (`POST /inventory/moves`) are open to operators because they don't change quantities. |
-| Scanner | Operators open `/scanner/` on the device and sign in with their user (session cookie plus CSRF; 10 attempts a minute per address and worker, `LOGIN_RATE_LIMIT`). Receiving, putaway, counting and moves work offline: actions queue on the device and send in order when it reconnects. Refused actions show under **Activity** with the reason and changed nothing. |
+| Scanner | Operators open `/scanner/` on the device and sign in with their user (session cookie plus CSRF; 10 attempts a minute per address and worker, `LOGIN_RATE_LIMIT`). Receiving, putaway, picking, counting and moves work offline: actions queue on the device and send in order when it reconnects. Refused actions show under **Activity** with the reason and changed nothing. |
 | Scanner sync | `POST /api/v1/sync/push` applies queued commands once each; every command is kept in `platform_synccommand` with its device and outcome. `GET /api/v1/sync/pull?site_id=&cursor=` serves reference data and open work; incremental pulls overlap by `SYNC_PULL_OVERLAP_SECONDS` (300). |
 | ASN upload | `POST /api/v1/inbound-notices:import` takes a CSV (`client_ref, site_code, expected_at, sku` or `barcode`, `qty`, optional `uom, lot, expiry, kind, notes`). Rows sharing a `client_ref` become one ASN. One bad row rejects the whole file with row numbers; the file is kept as an import document. Staff add `?client_id=`. |
 | Receipt variances | Over, short or unexpected receipt lines open a `receipt.variance` case with the line-by-line detail. |
@@ -132,3 +133,14 @@ CI (`.github/workflows/ci.yml`) runs all of the above plus `check --deploy` and 
   Backorders are topped up by a supervisor run, not automatically on every putaway.
 - Allocation and cancellation lock the order row, so an order cancelled while allocating releases cleanly; a late
   allocation result never changes a cancelled order.
+- Picked stock leaves the inventory ledger at the bin (movement kind `pick`). Packing and loading track it from
+  there; there is no separate "picked" stock location.
+- Only fully allocated orders can join a wave. A backordered order waits for a top-up rather than shipping part.
+- One confirmation per pick task, for its full quantity. Anything less is a short pick.
+- After a short pick the ledger still shows the missing stock in that bin until someone counts it (the
+  `inventory.short_pick` case). Re-allocation for that pick skips the bin, but other orders could still be
+  allocated from it, so count promptly.
+- Pick tasks are listed at `GET /pick-tasks` (not `GET /tasks`, which stays putaway-only), because they carry
+  different fields. `POST /tasks/{id}/claim` claims either kind.
+- Every pick locks its wave row, so picks within one wave run one at a time. At pilot volumes that's invisible,
+  and it guarantees the wave completes exactly once.
