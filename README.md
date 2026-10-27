@@ -1,15 +1,15 @@
-# Logistics suite
+# Nuronteq
 
-Contract warehousing, transport and billing for a South African 3PL. A Django modular monolith on one
+Nuronteq: contract warehousing, transport and billing for a South African 3PL. A Django modular monolith on one
 PostgreSQL database, built milestone by milestone from the Phase 1 Delivery Specification. Done so far:
-M0 (platform services, master data, bins) and the first part of M1 (ASNs, receiving, inventory ledger,
-putaway).
+M0 (platform services, master data, bins), M1 (ASNs, receiving, inventory ledger, putaway, cycle counts,
+the offline scanner PWA) and the first part of M2 (sales orders, allocation, waves and picking).
 
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `apps/platform` | Bottom layer: users and roles, principals and scoping, API tokens, audit log, transactional outbox, idempotency, documents, exception queue, business numbers, CSV import engine |
+| `apps/platform` | Bottom layer: users and roles, principals and scoping, API tokens, audit log, transactional outbox, idempotency, documents, exception queue, business numbers, CSV import engine, outbound webhooks (`webhooks.py`) |
 | `apps/masterdata` | Clients and other parties, sites, items (UoMs, barcodes), vehicles, drivers, contracts, versioned rate cards |
 | `apps/oms` | Inbound notices (ASNs and returns) and outbound sales orders (API, CSV import, cancellation) |
 | `apps/wms` | Bins, receiving, the inventory ledger (`ledger.py`, the only code that changes stock), putaway, allocation (`allocation.py`, FEFO then FIFO), waves and picking (`picking.py`), packing into handling units with SSCC labels (`packing.py`, `sscc.py`, `labels.py`) |
@@ -64,6 +64,12 @@ CI (`.github/workflows/ci.yml`) runs all of the above plus `check --deploy` and 
 - Updates take `If-Match: <version>` and return 412 when the record changed.
 - Rows outside the caller's clients or sites return 404, never 403, so other clients' ids do not leak.
 - CSV imports are all-or-nothing. The uploaded file is kept as a `Document`.
+- Webhooks: a client admin or the client's own system subscribes an `https` URL to event types
+  (`GET /webhooks/events` lists them) with `POST /webhooks`; the signing secret is returned once. Each delivery
+  is a `POST` of `{id, type, version, occurred_at, client_id, data}` with headers `Nuronteq-Event`,
+  `Nuronteq-Delivery` and `Nuronteq-Signature: t=<unix>,v1=<hex>`, where `v1` is HMAC-SHA256 of
+  `"<t>." + body` keyed by the secret. Receivers should check the signature, reject a `t` older than five
+  minutes, and de-duplicate on `id` (delivery is at least once). Any 2xx is success; redirects are not followed.
 
 ## Runbook
 
@@ -72,6 +78,7 @@ CI (`.github/workflows/ci.yml`) runs all of the above plus `check --deploy` and 
 | Event delivery | `manage.py run_outbox` runs continuously (the `outbox` service in Compose). It stops cleanly on SIGTERM. |
 | Failed events | After `OUTBOX_MAX_ATTEMPTS` (8) a delivery is dead-lettered and an exception case `outbox.dead_letter` opens. Fix the cause, then use the **Replay** action on Event deliveries in the admin. |
 | Outbox lag | `GET /api/v1/readyz` reports `outbox_lag_seconds`; alert above 300. |
+| Webhooks | `run_outbox` also sends webhook deliveries. A failed delivery retries with backoff (30 s doubling, at most 6 h apart) up to `WEBHOOK_MAX_ATTEMPTS` (10, about 15 hours), then goes dead and opens a `webhook.dead_letter` case; once the receiver is fixed, a superuser uses **Send selected dead deliveries again** under Webhook deliveries in the admin. Clients see their delivery history at `GET /webhooks/{id}/deliveries` and can test with `POST /webhooks/{id}/ping`. Disabling a subscription (`DELETE /webhooks/{id}`) drops its queued deliveries quietly. Only public addresses are called: every DNS answer must be a global address and the connection goes to the address that was checked. |
 | Idempotency cleanup | Schedule `manage.py purge_idempotency` daily (cron or a scheduled container run). |
 | Encryption key rotation | Generate a key, put it **first** in `FIELD_ENCRYPTION_KEYS`, keep the old ones after it, deploy. Old values still decrypt and are re-encrypted on their next save. Never drop a key while rows may still use it. |
 | Inventory reconciliation | Schedule `manage.py reconcile_inventory` nightly. It compares every balance with its movement ledger and opens a critical `inventory.ledger_drift` case on any difference, and checks each balance's allocated quantity against its open allocations (`inventory.allocation_drift`). |
@@ -131,6 +138,10 @@ CI (`.github/workflows/ci.yml`) runs all of the above plus `check --deploy` and 
 
 - OMS doesn't check stock when it accepts an order (that would make OMS read WMS). Allocation runs from
   `oms.sales_order.accepted`, and an order that can't be filled becomes `backordered` a moment later.
+- Webhooks are sent by the outbox worker rather than a separate job queue, and carry the event payload as is
+  (the event catalog is the webhook contract). Only events about a client go to that client; internal events
+  such as waves and pick tasks are not offered. A dead delivery isn't replayed automatically: the client
+  pings to test the fix, then a superuser sends it again from the admin (Webhook deliveries).
 - A short order keeps a partial allocation rather than holding nothing, so stock isn't taken by a later order.
   Backorders are topped up by a supervisor run, not automatically on every putaway.
 - Allocation and cancellation lock the order row, so an order cancelled while allocating releases cleanly; a late

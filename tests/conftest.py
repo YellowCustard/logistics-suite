@@ -40,6 +40,9 @@ class Api:
             f"/api/v1{path}", json, content_type="application/json", headers=self._headers("PATCH", headers)
         )
 
+    def delete(self, path: str, headers=None):
+        return self.client.delete(f"/api/v1{path}", headers=self._headers("DELETE", headers))
+
     def upload(self, path: str, csv_text: str, name: str = "data.csv", headers=None):
         file = SimpleUploadedFile(name, csv_text.encode(), content_type="text/csv")
         return self.client.post(f"/api/v1{path}", {"file": file}, headers=self._headers("POST", headers))

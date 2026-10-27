@@ -11,7 +11,7 @@ from apps.platform.auth import BearerTokenAuth, PrincipalSessionAuth
 from apps.wms.api import router as wms_router
 
 api = NinjaAPI(
-    title="Logistics Suite API",
+    title="Nuronteq API",
     version="1.0.0",
     urls_namespace="api-v1",
     auth=[BearerTokenAuth(), PrincipalSessionAuth()],

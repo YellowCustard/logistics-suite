@@ -1,5 +1,5 @@
 {% load static %}{
-  "name": "Logistics Suite Scanner",
+  "name": "Nuronteq Scanner",
   "short_name": "Scanner",
   "start_url": "{% url 'scanner:index' %}",
   "scope": "{% url 'scanner:index' %}",

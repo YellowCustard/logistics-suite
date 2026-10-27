@@ -147,6 +147,12 @@ INVENTORY_VARIANCE_APPROVAL_PCT = float(env("INVENTORY_VARIANCE_APPROVAL_PCT", "
 # Without a prefix, packing refuses to open handling units. "0000000" is for local development only.
 GS1_COMPANY_PREFIX = env("GS1_COMPANY_PREFIX", "0000000" if DEBUG else "")
 SSCC_EXTENSION_DIGIT = env("SSCC_EXTENSION_DIGIT", "0")
+# Outbound webhooks to client systems. The two ALLOW flags exist for local testing only: never set them on a
+# server, because they let webhooks reach internal addresses.
+WEBHOOK_TIMEOUT_SECONDS = float(env("WEBHOOK_TIMEOUT_SECONDS", "10"))
+WEBHOOK_MAX_ATTEMPTS = int(env("WEBHOOK_MAX_ATTEMPTS", "10"))
+WEBHOOK_ALLOW_INSECURE = env_bool("WEBHOOK_ALLOW_INSECURE", False)
+WEBHOOK_ALLOW_PRIVATE_NETWORKS = env_bool("WEBHOOK_ALLOW_PRIVATE_NETWORKS", False)
 # Endpoints that authenticate or deduplicate differently (token grant, vendor webhooks, offline sync).
 IDEMPOTENCY_EXEMPT_PREFIXES = ["/api/v1/auth/", "/api/v1/integrations/", "/api/v1/sync/"]
 
