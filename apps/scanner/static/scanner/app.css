@@ -103,3 +103,15 @@ ul.list li a { color: inherit; text-decoration: none; display: block; }
 .flash { padding: 10px 12px; border-radius: 8px; margin: 10px 0; }
 .flash.ok { background: #d5f5e3; color: var(--ok); }
 .flash.bad { background: #fadbd8; color: var(--bad); }
+.tag.applied { background: #d5f5e3; color: var(--ok); }
+
+canvas.signature {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  touch-action: none; /* the finger draws instead of scrolling the page */
+  margin-bottom: 8px;
+}
