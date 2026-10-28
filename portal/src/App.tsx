@@ -5,10 +5,14 @@ import { ApiError } from "./api/client";
 import { AuthProvider, useAuth } from "./auth";
 import { Layout } from "./components/Layout";
 import { Loading } from "./components/ui";
+import { Documents } from "./pages/Documents";
 import { Home } from "./pages/Home";
 import { Inbound } from "./pages/Inbound";
 import { InboundDetail } from "./pages/InboundDetail";
+import { ItemDetail } from "./pages/ItemDetail";
+import { Items } from "./pages/Items";
 import { NewInbound } from "./pages/NewInbound";
+import { NewItem } from "./pages/NewItem";
 import { NewOrder } from "./pages/NewOrder";
 import { OrderDetail } from "./pages/OrderDetail";
 import { Orders } from "./pages/Orders";
@@ -17,6 +21,7 @@ import { SignIn } from "./pages/SignIn";
 import { Stock } from "./pages/Stock";
 import { Tracking } from "./pages/Tracking";
 import { UploadInbound } from "./pages/UploadInbound";
+import { UploadItems } from "./pages/UploadItems";
 import { UploadOrders } from "./pages/UploadOrders";
 
 export const queryClient = new QueryClient({
@@ -46,6 +51,11 @@ export const routes = [
       { path: "stock", element: <Stock /> },
       { path: "shipments", element: <Shipments /> },
       { path: "shipments/:id", element: <Tracking /> },
+      { path: "items", element: <Items /> },
+      { path: "items/new", element: <NewItem /> },
+      { path: "items/upload", element: <UploadItems /> },
+      { path: "items/:id", element: <ItemDetail /> },
+      { path: "documents", element: <Documents /> },
       { path: "*", element: <Navigate to="/" replace /> },
     ],
   },

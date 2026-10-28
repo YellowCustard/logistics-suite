@@ -158,7 +158,13 @@ ol.timeline .when { color: var(--muted); font-size: 0.85rem; }
 
 @media (max-width: 640px) {
   .bar { flex-wrap: wrap; gap: 8px; }
-  .bar nav { order: 3; flex-basis: 100%; }
+  .bar nav { order: 3; flex-basis: 100%; flex-wrap: wrap; overflow-x: visible; }
+  .bar nav a { padding: 6px 8px; }
   .who span { display: none; }
 }
 .cards + .table-wrap { margin-top: 10px; }
+label.check { display: flex; align-items: center; gap: 6px; font-weight: normal; margin: 6px 0; }
+label.check input { width: auto; margin: 0; }
+img.thumb { display: block; width: 56px; height: 56px; object-fit: cover; border-radius: 4px; border: 1px solid var(--line); background: var(--panel); }
+section + section { margin-top: 18px; }
+.table-wrap + form.filters { margin-top: 10px; }

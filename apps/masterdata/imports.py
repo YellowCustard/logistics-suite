@@ -13,7 +13,6 @@ from .models import (
     ChargeType,
     Currency,
     Item,
-    ItemBarcode,
     ItemUom,
     Party,
     PartyRoleType,
@@ -113,7 +112,7 @@ def item_writer(client: Party):
         if row.case_uom and row.case_factor:
             ItemUom.objects.create(item=item, uom=row.case_uom.upper(), factor=row.case_factor)
         if row.barcode:
-            ItemBarcode.objects.create(item=item, client=client, barcode=row.barcode, uom=item.base_uom)
+            services.add_barcode(item, row.barcode)
         return item
 
     return create_item

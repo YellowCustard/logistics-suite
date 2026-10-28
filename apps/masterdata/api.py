@@ -1,10 +1,12 @@
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Annotated
 
 from django.db.models import Q, QuerySet
 from ninja import File, Header, Router, Schema, Status
 from ninja.files import UploadedFile
+from pydantic import Field, StringConstraints
 
 from apps.platform import csvimport
 from apps.platform.apiutils import Problem, get_scoped, paginate, principal_of, require_roles, require_staff
@@ -15,6 +17,7 @@ from . import imports, services
 from .models import (
     Contract,
     Item,
+    ItemBarcode,
     Party,
     PartyRoleType,
     Person,
@@ -176,6 +179,17 @@ def import_sites(request, file: File[UploadedFile]):
 # --- Items -----------------------------------------------------------------------------------------------------
 
 
+class PackSizeOut(Schema):
+    uom: str
+    factor: int
+
+
+class BarcodeOut(Schema):
+    id: uuid.UUID
+    barcode: str
+    uom: str
+
+
 class ItemOut(Schema):
     id: uuid.UUID
     client_id: uuid.UUID
@@ -188,11 +202,56 @@ class ItemOut(Schema):
     lot_tracked: bool
     expiry_tracked: bool
     is_active: bool
+    version: int
+    pack_sizes: list[PackSizeOut]
+    barcodes: list[BarcodeOut]
+
+    @staticmethod
+    def resolve_pack_sizes(obj: Item):
+        return sorted(obj.uoms.all(), key=lambda u: (u.factor, u.uom))
+
+    @staticmethod
+    def resolve_barcodes(obj: Item):
+        return sorted(obj.barcodes.all(), key=lambda b: b.barcode)
 
 
 class ItemPage(Schema):
     items: list[ItemOut]
     next_cursor: uuid.UUID | None
+
+
+class ItemPatch(Schema):
+    """What may change on an item. SKU, base unit and lot/expiry tracking are fixed once stock may exist."""
+
+    description: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)] | None = None
+    weight_kg: Annotated[Decimal, Field(ge=0, max_digits=12, decimal_places=3)] | None = None
+    volume_m3: Annotated[Decimal, Field(ge=0, max_digits=12, decimal_places=5)] | None = None
+    units_per_pallet: Annotated[int, Field(ge=1)] | None = None
+    is_active: bool | None = None
+
+
+class PackSizeIn(Schema):
+    uom: Annotated[str, StringConstraints(strip_whitespace=True, pattern=r"^[A-Za-z0-9]{1,10}$")]
+    factor: Annotated[int, Field(ge=2, le=1_000_000)]
+
+
+class BarcodeIn(Schema):
+    barcode: Annotated[str, StringConstraints(min_length=1, max_length=64)]
+    uom: Annotated[str, StringConstraints(max_length=10)] = ""
+
+
+def _items(principal: Principal) -> QuerySet:
+    return principal.scope(Item.objects.all()).prefetch_related("uoms", "barcodes")
+
+
+def _item_to_change(principal: Principal, item_id: uuid.UUID) -> Item:
+    """Client admins change their own items; staff need the system admin role, as for creating items."""
+    if principal.is_client_scoped:
+        if principal.kind == "user":
+            require_roles(principal, Role.CLIENT_ADMIN)
+    else:
+        require_roles(principal, Role.SYSTEM_ADMIN)
+    return get_scoped(_items(principal), item_id)
 
 
 def _target_client(principal: Principal, client_id: uuid.UUID | None) -> Party:
@@ -209,7 +268,7 @@ def _target_client(principal: Principal, client_id: uuid.UUID | None) -> Party:
 
 @router.get("/items", response=ItemPage)
 def list_items(request, sku: str | None = None, cursor: uuid.UUID | None = None, limit: int = 50):
-    qs = principal_of(request).scope(Item.objects.all())
+    qs = _items(principal_of(request))
     if sku:
         qs = qs.filter(sku=sku)
     items, next_cursor = paginate(qs, cursor, limit)
@@ -238,7 +297,39 @@ def import_items(request, file: File[UploadedFile], client_id: uuid.UUID | None 
 
 @router.get("/items/{item_id}", response=ItemOut)
 def get_item(request, item_id: uuid.UUID):
-    return get_scoped(principal_of(request).scope(Item.objects.all()), item_id)
+    return get_scoped(_items(principal_of(request)), item_id)
+
+
+@router.patch("/items/{item_id}", response=ItemOut)
+def patch_item(request, item_id: uuid.UUID, body: ItemPatch, if_match: Header[int]):
+    item = _item_to_change(principal_of(request), item_id)
+    changes = body.dict(exclude_unset=True)
+    for required in ("description", "is_active"):
+        if required in changes and changes[required] is None:
+            raise Problem(422, "Invalid change", f"{required} cannot be empty.")
+    services.update_with_version(item, if_match, changes)
+    return get_scoped(_items(principal_of(request)), item_id)
+
+
+@router.post("/items/{item_id}/pack-sizes", response={201: ItemOut})
+def add_pack_size(request, item_id: uuid.UUID, body: PackSizeIn):
+    item = _item_to_change(principal_of(request), item_id)
+    services.add_pack_size(item, body.uom, body.factor)
+    return Status(201, get_scoped(_items(principal_of(request)), item_id))
+
+
+@router.post("/items/{item_id}/barcodes", response={201: ItemOut})
+def add_barcode(request, item_id: uuid.UUID, body: BarcodeIn):
+    item = _item_to_change(principal_of(request), item_id)
+    services.add_barcode(item, body.barcode, body.uom)
+    return Status(201, get_scoped(_items(principal_of(request)), item_id))
+
+
+@router.delete("/items/{item_id}/barcodes/{barcode_id}", response=ItemOut)
+def remove_barcode(request, item_id: uuid.UUID, barcode_id: uuid.UUID):
+    item = _item_to_change(principal_of(request), item_id)
+    get_scoped(ItemBarcode.objects.filter(item=item), barcode_id).delete()
+    return get_scoped(_items(principal_of(request)), item_id)
 
 
 # --- Vehicles and drivers ----------------------------------------------------------------------------------------

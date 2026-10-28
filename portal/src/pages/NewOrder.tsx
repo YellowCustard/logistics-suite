@@ -15,6 +15,7 @@ const blankLine = (): Line => ({ key: nextKey++, sku: "", qty: "", uom: "" });
 export function NewOrder() {
   const sites = useSites();
   const items = useItems();
+  const active = (items.data ?? []).filter((i) => i.is_active); // the API accepts active items only
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -33,7 +34,7 @@ export function NewOrder() {
   const [notes, setNotes] = useState("");
   const [lines, setLines] = useState<Line[]>([blankLine()]);
 
-  const known = new Set((items.data ?? []).map((i) => i.sku));
+  const known = new Set(active.map((i) => i.sku));
   const unknown = lines.filter((l) => l.sku.trim() && items.data && !known.has(l.sku.trim())).map((l) => l.sku.trim());
   const addresses = sites.data?.addresses ?? [];
   const mode = addresses.length === 0 ? "new" : shipMode;
@@ -165,7 +166,7 @@ export function NewOrder() {
         <fieldset>
           <legend>Items</legend>
           <datalist id="skus">
-            {items.data?.map((i) => (
+            {active.map((i) => (
               <option key={i.id} value={i.sku}>
                 {i.description}
               </option>
@@ -232,7 +233,7 @@ export function NewOrder() {
               </tbody>
             </table>
           </div>
-          {unknown.length > 0 && <p className="muted">Not in your catalogue: {unknown.join(", ")}</p>}
+          {unknown.length > 0 && <p className="muted">Not an active item in your catalogue: {unknown.join(", ")}</p>}
           <div className="actions">
             <button
               type="button"

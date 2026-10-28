@@ -80,4 +80,21 @@ export const FAILURE_REASON: Record<string, string> = {
   other: "Other",
 };
 
+export const DOCUMENT_KIND: Record<string, string> = {
+  pod_signature: "POD signature",
+  pod_photo: "POD photo",
+  receipt_photo: "Receipt photo",
+  import_file: "Uploaded file",
+  invoice: "Invoice",
+  customs: "Customs",
+  permit: "Permit",
+  insurance: "Insurance",
+  export_proof: "Export proof",
+  other: "Other",
+};
+
+const megabyte = new Intl.NumberFormat("en-ZA", { maximumFractionDigits: 1 });
+export const fileSize = (bytes: number) =>
+  bytes < 1024 ? `${bytes} B` : bytes < 1024 ** 2 ? `${Math.round(bytes / 1024)} KB` : `${megabyte.format(bytes / 1024 ** 2)} MB`;
+
 export const label = (labels: Record<string, string>, value: string) => labels[value] ?? value.replace(/_/g, " ");

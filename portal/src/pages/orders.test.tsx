@@ -24,7 +24,7 @@ const sites = {
   next_cursor: null,
 };
 const items = {
-  items: [{ id: "i1", sku: "WATER", description: "Water 500 ml", base_uom: "EA" }],
+  items: [{ id: "i1", sku: "WATER", description: "Water 500 ml", base_uom: "EA", is_active: true }],
   next_cursor: null,
 };
 const order = {
@@ -62,7 +62,7 @@ it("places an order to a saved address", async () => {
   await userEvent.click(screen.getByRole("button", { name: "Add line" }));
   await userEvent.type(screen.getByLabelText("SKU, line 2"), "MYSTERY");
   await userEvent.type(screen.getByLabelText("Quantity, line 2"), "1");
-  expect(screen.getByText("Not in your catalogue: MYSTERY")).toBeInTheDocument();
+  expect(screen.getByText("Not an active item in your catalogue: MYSTERY")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Remove line 2" }));
   await userEvent.click(screen.getByRole("button", { name: "Place order" }));
 

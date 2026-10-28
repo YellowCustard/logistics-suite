@@ -19,6 +19,7 @@ export const sast = (local: string) => `${local}:00+02:00`;
 export function NewInbound() {
   const sites = useSites();
   const items = useItems();
+  const active = (items.data ?? []).filter((i) => i.is_active); // the API accepts active items only
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -31,7 +32,7 @@ export function NewInbound() {
   const [notes, setNotes] = useState("");
   const [lines, setLines] = useState<Line[]>([blankLine()]);
 
-  const catalogue = new Map((items.data ?? []).map((i) => [i.sku, i]));
+  const catalogue = new Map(active.map((i) => [i.sku, i]));
   const unknown = lines.filter((l) => l.sku.trim() && items.data && !catalogue.has(l.sku.trim())).map((l) => l.sku);
 
   const send = useMutation({
@@ -116,7 +117,7 @@ export function NewInbound() {
         <fieldset>
           <legend>Items</legend>
           <datalist id="skus">
-            {items.data?.map((i) => (
+            {active.map((i) => (
               <option key={i.id} value={i.sku}>
                 {i.description}
               </option>
@@ -206,7 +207,7 @@ export function NewInbound() {
               </tbody>
             </table>
           </div>
-          {unknown.length > 0 && <p className="muted">Not in your catalogue: {unknown.join(", ")}</p>}
+          {unknown.length > 0 && <p className="muted">Not an active item in your catalogue: {unknown.join(", ")}</p>}
           <div className="actions">
             <button
               type="button"

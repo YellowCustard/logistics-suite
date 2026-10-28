@@ -335,7 +335,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List Documents
+         * @description Evidence and files of the caller's clients, newest first: PODs, receipt photos and uploaded files.
+         */
+        get: operations["apps_platform_api_list_documents"];
         put?: never;
         /** Upload Document */
         post: operations["apps_platform_api_upload_document"];
@@ -795,6 +799,58 @@ export interface paths {
         get: operations["apps_masterdata_api_get_item"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Patch Item */
+        patch: operations["apps_masterdata_api_patch_item"];
+        trace?: never;
+    };
+    "/api/v1/items/{item_id}/barcodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add Barcode */
+        post: operations["apps_masterdata_api_add_barcode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/items/{item_id}/barcodes/{barcode_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove Barcode */
+        delete: operations["apps_masterdata_api_remove_barcode"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/items/{item_id}/pack-sizes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add Pack Size */
+        post: operations["apps_masterdata_api_add_pack_size"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2020,6 +2076,28 @@ export interface components {
             /** Vehicle Id */
             vehicle_id?: string | null;
         };
+        /** BarcodeIn */
+        BarcodeIn: {
+            /** Barcode */
+            barcode: string;
+            /**
+             * Uom
+             * @default
+             */
+            uom: string;
+        };
+        /** BarcodeOut */
+        BarcodeOut: {
+            /** Barcode */
+            barcode: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Uom */
+            uom: string;
+        };
         /** BlindCountOut */
         BlindCountOut: {
             /** Decided At */
@@ -2463,6 +2541,41 @@ export interface components {
          * @enum {string}
          */
         DocumentKind: "pod_signature" | "pod_photo" | "receipt_photo" | "customs" | "permit" | "insurance" | "invoice" | "export_proof" | "import_file" | "other";
+        /** DocumentListOut */
+        DocumentListOut: {
+            /**
+             * Captured At
+             * Format: date-time
+             */
+            captured_at: string;
+            /** Client Id */
+            client_id: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Linked Id */
+            linked_id: string;
+            /** Linked Type */
+            linked_type: string;
+            /** Mime */
+            mime: string;
+            /** Original Name */
+            original_name: string;
+            /**
+             * Reference
+             * @description What the document is evidence of, e.g. shipment, order and reference
+             * @default
+             */
+            reference: string;
+            /** Sha256 */
+            sha256: string;
+            /** Size Bytes */
+            size_bytes: number;
+        };
         /** DocumentOut */
         DocumentOut: {
             /**
@@ -2491,6 +2604,13 @@ export interface components {
             sha256: string;
             /** Size Bytes */
             size_bytes: number;
+        };
+        /** DocumentPage */
+        DocumentPage: {
+            /** Items */
+            items: components["schemas"]["DocumentListOut"][];
+            /** Next Cursor */
+            next_cursor: string | null;
         };
         /** DocumentRef */
         DocumentRef: {
@@ -2906,6 +3026,8 @@ export interface components {
         InboundStatus: "accepted" | "receiving" | "closed" | "cancelled";
         /** ItemOut */
         ItemOut: {
+            /** Barcodes */
+            barcodes: components["schemas"]["BarcodeOut"][];
             /** Base Uom */
             base_uom: string;
             /**
@@ -2926,10 +3048,14 @@ export interface components {
             is_active: boolean;
             /** Lot Tracked */
             lot_tracked: boolean;
+            /** Pack Sizes */
+            pack_sizes: components["schemas"]["PackSizeOut"][];
             /** Sku */
             sku: string;
             /** Units Per Pallet */
             units_per_pallet: number | null;
+            /** Version */
+            version: number;
             /** Volume M3 */
             volume_m3: string | null;
             /** Weight Kg */
@@ -2941,6 +3067,22 @@ export interface components {
             items: components["schemas"]["ItemOut"][];
             /** Next Cursor */
             next_cursor: string | null;
+        };
+        /**
+         * ItemPatch
+         * @description What may change on an item. SKU, base unit and lot/expiry tracking are fixed once stock may exist.
+         */
+        ItemPatch: {
+            /** Description */
+            description?: string | null;
+            /** Is Active */
+            is_active?: boolean | null;
+            /** Units Per Pallet */
+            units_per_pallet?: number | null;
+            /** Volume M3 */
+            volume_m3?: number | string | null;
+            /** Weight Kg */
+            weight_kg?: number | string | null;
         };
         /** ItemRow */
         ItemRow: {
@@ -3260,6 +3402,20 @@ export interface components {
              * Format: uuid
              */
             sales_order_id: string;
+        };
+        /** PackSizeIn */
+        PackSizeIn: {
+            /** Factor */
+            factor: number;
+            /** Uom */
+            uom: string;
+        };
+        /** PackSizeOut */
+        PackSizeOut: {
+            /** Factor */
+            factor: number;
+            /** Uom */
+            uom: string;
         };
         /** PhotoRef */
         PhotoRef: {
@@ -5544,6 +5700,37 @@ export interface operations {
             };
         };
     };
+    apps_platform_api_list_documents: {
+        parameters: {
+            query?: {
+                /** @description One or more kinds; all kinds when omitted */
+                kind?: components["schemas"]["DocumentKind"][] | null;
+                /** @description Start of an order, shipment, notice, receipt or file reference */
+                q?: string;
+                /** @description Captured on or after this day (SAST) */
+                captured_from?: string | null;
+                /** @description Captured on or before this day (SAST) */
+                captured_to?: string | null;
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentPage"];
+                };
+            };
+        };
+    };
     apps_platform_api_upload_document: {
         parameters: {
             query?: never;
@@ -6264,6 +6451,109 @@ export interface operations {
         responses: {
             /** @description OK */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ItemOut"];
+                };
+            };
+        };
+    };
+    apps_masterdata_api_patch_item: {
+        parameters: {
+            query?: never;
+            header: {
+                if_match: number;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ItemPatch"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ItemOut"];
+                };
+            };
+        };
+    };
+    apps_masterdata_api_add_barcode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BarcodeIn"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ItemOut"];
+                };
+            };
+        };
+    };
+    apps_masterdata_api_remove_barcode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+                barcode_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ItemOut"];
+                };
+            };
+        };
+    };
+    apps_masterdata_api_add_pack_size: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PackSizeIn"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };

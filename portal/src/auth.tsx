@@ -11,7 +11,7 @@ type Auth = {
   signOut: () => Promise<void>;
 };
 
-const AuthContext = createContext<Auth | null>(null);
+export const AuthContext = createContext<Auth | null>(null);
 
 const isClient = (s: Session) => s.roles.some((r) => r === "client_admin" || r === "client_user");
 
@@ -59,4 +59,9 @@ export function useAuth(): Auth {
   const auth = useContext(AuthContext);
   if (!auth) throw new Error("useAuth outside AuthProvider");
   return auth;
+}
+
+/** Client admins manage the catalogue and settings; client users read them. Access is enforced by the API. */
+export function useIsClientAdmin(): boolean {
+  return useAuth().session?.roles.includes("client_admin") ?? false;
 }

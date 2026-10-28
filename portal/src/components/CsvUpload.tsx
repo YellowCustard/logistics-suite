@@ -55,8 +55,9 @@ export function CsvUpload({
   templateName: string;
   templateRows: () => unknown[][];
   noun: [string, string];
-  created: (result: Record<string, unknown>) => Created[];
-  linkTo: (id: string) => string;
+  /** The records made, to link to; or just how many, when the endpoint only counts them. */
+  created: (result: Record<string, unknown>) => Created[] | number;
+  linkTo?: (id: string) => string;
   invalidate: string[][];
   children: ReactNode;
 }) {
@@ -71,7 +72,9 @@ export function CsvUpload({
     onSuccess: () => invalidate.forEach((queryKey) => void queryClient.invalidateQueries({ queryKey })),
   });
   const rowErrors = send.error instanceof ApiError && send.error.errors.some((e) => e.row !== undefined);
-  const records = send.data ? created(send.data) : [];
+  const made = send.data ? created(send.data) : [];
+  const records = typeof made === "number" ? [] : made;
+  const count = typeof made === "number" ? made : made.length;
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -110,12 +113,12 @@ export function CsvUpload({
       {send.data && (
         <>
           <div className="flash ok" role="status">
-            Imported {records.length} {records.length === 1 ? noun[0] : noun[1]}.
+            Imported {count} {count === 1 ? noun[0] : noun[1]}.
           </div>
           <ul>
             {records.map((r) => (
               <li key={r.id}>
-                <Link to={linkTo(r.id)}>{r.number}</Link>{" "}
+                {linkTo ? <Link to={linkTo(r.id)}>{r.number}</Link> : r.number}{" "}
                 {r.client_ref && `(${r.client_ref})`}
               </li>
             ))}
