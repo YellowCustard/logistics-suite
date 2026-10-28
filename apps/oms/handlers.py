@@ -25,3 +25,13 @@ def record_allocation(event: Event) -> None:
 def record_packed(event: Event) -> None:
     if event.payload.get("order_fully_packed"):
         services.record_packed(uuid.UUID(event.payload["sales_order_id"]))
+
+
+@subscribe("tms.trip.dispatched", consumer="oms.record_dispatched")
+def record_dispatched(event: Event) -> None:
+    for shipment in event.payload["shipments"]:
+        services.record_dispatched(
+            uuid.UUID(shipment["sales_order_id"]),
+            trip_number=event.payload["number"],
+            shipment_number=shipment["number"],
+        )

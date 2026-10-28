@@ -52,19 +52,19 @@ include_external_packages = false
 name = "Platform is the bottom layer and imports no business module"
 type = "forbidden"
 source_modules = ["apps.platform"]
-forbidden_modules = ["apps.masterdata", "apps.oms", "apps.wms"]
+forbidden_modules = ["apps.masterdata", "apps.oms", "apps.wms", "apps.tms"]
 
 [[tool.importlinter.contracts]]
 name = "The scanner shell holds no business logic; it talks to the API"
 type = "forbidden"
 source_modules = ["apps.scanner"]
-forbidden_modules = ["apps.masterdata", "apps.oms", "apps.wms"]
+forbidden_modules = ["apps.masterdata", "apps.oms", "apps.wms", "apps.tms"]
 
 [[tool.importlinter.contracts]]
 name = "Master data depends only on platform"
 type = "forbidden"
 source_modules = ["apps.masterdata"]
-forbidden_modules = ["apps.oms", "apps.wms"]
+forbidden_modules = ["apps.oms", "apps.wms", "apps.tms"]
 
 [[tool.importlinter.contracts]]
 name = "Orders never depend on the warehouse (WMS reacts to OMS, not the reverse)"
@@ -75,7 +75,7 @@ forbidden_modules = ["apps.wms"]
 [[tool.importlinter.contracts]]
 name = "Business modules reach master data only through its public services and models"
 type = "forbidden"
-source_modules = ["apps.oms", "apps.wms"]
+source_modules = ["apps.oms", "apps.wms", "apps.tms"]
 forbidden_modules = ["apps.masterdata.api", "apps.masterdata.admin", "apps.masterdata.imports"]
 
 [[tool.importlinter.contracts]]
@@ -84,3 +84,15 @@ type = "forbidden"
 source_modules = ["apps.wms"]
 forbidden_modules = ["apps.oms.models", "apps.oms.api", "apps.oms.admin", "apps.oms.handlers"]
 allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "Transport learns about orders and packing only from events"
+type = "forbidden"
+source_modules = ["apps.tms"]
+forbidden_modules = ["apps.oms", "apps.wms"]
+
+[[tool.importlinter.contracts]]
+name = "Orders and the warehouse never depend on transport"
+type = "forbidden"
+source_modules = ["apps.oms", "apps.wms"]
+forbidden_modules = ["apps.tms"]
