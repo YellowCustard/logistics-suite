@@ -59,6 +59,15 @@ USERS = [
 ]
 
 
+def deliver_events() -> None:
+    """Publish and deliver pending outbox events in this process instead of waiting for the worker."""
+    for _ in range(20):  # handlers can emit follow-up events; bounded in case one keeps failing
+        published = outbox.publish_pending()
+        stats = outbox.deliver_pending()
+        if not published and not (stats.delivered or stats.duplicates):
+            return
+
+
 class Command(BaseCommand):
     help = (
         "Load demo data (fictional clients KAL and BAO at site DEMO-JHB) for staging. Never run it in "
@@ -77,12 +86,7 @@ class Command(BaseCommand):
             self.stdout.write(f"Demo data already loaded (site {SITE_CODE} exists); nothing to do.")
             return
         passwords = self._seed()
-        # Deliver the events now (the worker would too) so notices close before anyone looks.
-        for _ in range(20):  # handlers can emit follow-up events; bounded in case one keeps failing
-            published = outbox.publish_pending()
-            stats = outbox.deliver_pending()
-            if not published and not (stats.delivered or stats.duplicates):
-                break
+        deliver_events()  # the worker would too; this way notices close before anyone looks
         self.stdout.write(self.style.SUCCESS(f"Demo data loaded at site {SITE_CODE}."))
         self.stdout.write("Demo logins (shown once, store them now):")
         for email, password in passwords:
