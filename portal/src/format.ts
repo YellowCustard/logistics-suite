@@ -27,6 +27,15 @@ export const ORDER_STATUS: Record<string, string> = {
 /** Statuses of an order that is still moving, in the order it moves through them. */
 export const OPEN_ORDER_STATUSES = ["accepted", "allocated", "backordered", "picking", "packed", "dispatched"];
 
+export const INBOUND_STATUS: Record<string, string> = {
+  accepted: "Expected",
+  receiving: "Being received",
+  closed: "Received",
+  cancelled: "Cancelled",
+};
+
+export const INBOUND_KIND: Record<string, string> = { purchase: "Stock delivery", return: "Customer return" };
+
 export const STOCK_STATUS: Record<string, string> = {
   available: "Available",
   quarantine: "Quarantine",

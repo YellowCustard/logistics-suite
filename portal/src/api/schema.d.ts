@@ -1109,7 +1109,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Receipts */
+        /**
+         * List Receipts
+         * @description Receipts with their lines: what arrived, its condition, and photos of damaged stock.
+         */
         get: operations["apps_wms_api_list_receipts"];
         put?: never;
         /** Open Receipt */
@@ -2813,6 +2816,11 @@ export interface components {
         };
         /** InboundNoticeOut */
         InboundNoticeOut: {
+            /**
+             * Can Cancel
+             * @description Cancellation is possible until receiving starts
+             */
+            can_cancel: boolean;
             /** Cancelled Reason */
             cancelled_reason: string;
             /**
@@ -3252,6 +3260,16 @@ export interface components {
              * Format: uuid
              */
             sales_order_id: string;
+        };
+        /** PhotoRef */
+        PhotoRef: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Mime */
+            mime: string;
         };
         /** PickConfirmIn */
         PickConfirmIn: {
@@ -3720,8 +3738,15 @@ export interface components {
             lot: string;
             /** Lpn */
             lpn: string;
+            /**
+             * Photos
+             * @description Download from /documents/{id}/download
+             */
+            photos?: components["schemas"]["PhotoRef"][];
             /** Qty */
             qty: string;
+            /** Sku */
+            sku: string;
             /** Uom */
             uom: string;
         };
@@ -5930,6 +5955,9 @@ export interface operations {
             query?: {
                 status?: components["schemas"]["InboundStatus"] | null;
                 site_id?: string | null;
+                /** @description Notice number or your reference, or the start of it */
+                q?: string;
+                newest_first?: boolean;
                 cursor?: string | null;
                 limit?: number;
             };
@@ -6694,6 +6722,7 @@ export interface operations {
         parameters: {
             query?: {
                 status?: components["schemas"]["ReceiptStatus"] | null;
+                inbound_notice_id?: string | null;
                 cursor?: string | null;
                 limit?: number;
             };

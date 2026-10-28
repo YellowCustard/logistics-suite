@@ -68,6 +68,7 @@ class InboundNoticeOut(Schema):
     client_ref: str
     kind: str
     status: str
+    can_cancel: bool = Field(..., description="Cancellation is possible until receiving starts")
     expected_at: datetime
     notes: str
     cancelled_reason: str
@@ -77,6 +78,10 @@ class InboundNoticeOut(Schema):
     @staticmethod
     def resolve_lines(obj: InboundNotice):
         return list(obj.lines.select_related("item").order_by("line_no"))
+
+    @staticmethod
+    def resolve_can_cancel(obj: InboundNotice) -> bool:
+        return obj.status == InboundStatus.ACCEPTED
 
 
 class InboundNoticeSummary(Schema):
@@ -199,6 +204,8 @@ def list_inbound_notices(
     request,
     status: InboundStatus | None = None,
     site_id: uuid.UUID | None = None,
+    q: Annotated[str, Query(max_length=60, description="Notice number or your reference, or the start of it")] = "",
+    newest_first: bool = False,
     cursor: uuid.UUID | None = None,
     limit: int = 50,
 ):
@@ -207,7 +214,10 @@ def list_inbound_notices(
         qs = qs.filter(status=status)
     if site_id:
         qs = qs.filter(site_id=site_id)
-    items, next_cursor = paginate(qs, cursor, limit)
+    if q.strip():
+        term = q.strip()
+        qs = qs.filter(Q(number__istartswith=term) | Q(client_ref__istartswith=term))
+    items, next_cursor = paginate(qs, cursor, limit, newest_first=newest_first)
     return {"items": items, "next_cursor": next_cursor}
 
 

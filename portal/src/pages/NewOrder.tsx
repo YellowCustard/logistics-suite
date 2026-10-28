@@ -3,7 +3,7 @@ import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
 
 import { post } from "../api/client";
-import { useItems, useSites } from "../api/lookups";
+import { useItems, usePreferredWarehouse, useSites } from "../api/lookups";
 import type { Order, OrderIn } from "../api/types";
 import { ErrorBox, Loading } from "../components/ui";
 
@@ -18,7 +18,9 @@ export function NewOrder() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  const [siteCode, setSiteCode] = useState("");
+  const [siteChoice, setSiteCode] = useState("");
+  const preferred = usePreferredWarehouse();
+  const siteCode = siteChoice || preferred;
   const [shipMode, setShipMode] = useState<"saved" | "new">("saved");
   const [shipToCode, setShipToCode] = useState("");
   const [shipName, setShipName] = useState("");
@@ -53,7 +55,7 @@ export function NewOrder() {
   function submit(event: FormEvent) {
     event.preventDefault();
     place.mutate({
-      site_code: siteCode || sites.data?.warehouses[0]?.code || "",
+      site_code: siteCode,
       client_ref: clientRef.trim(),
       ship_to_code: mode === "saved" ? shipToCode || addresses[0]?.code || "" : "",
       ship_to: mode === "new" ? { name: shipName.trim(), address: shipAddress.trim() } : null,

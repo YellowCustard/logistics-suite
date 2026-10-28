@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { get, query } from "./client";
-import type { Item, Site } from "./types";
+import type { Item, Site, StockSummary } from "./types";
 
 const MAX_PAGES = 50; // 10 000 rows; a client catalogue is far smaller
 
@@ -45,4 +45,18 @@ export function useItems() {
     queryFn: async () => (await all<Item>("/items")).sort((a, b) => a.sku.localeCompare(b.sku)),
     staleTime: 5 * 60_000,
   });
+}
+
+/** The warehouse a new order or notice most likely concerns: where the client holds the most stock lines,
+ * else the first warehouse. Shares its cache with the Stock and Home screens. */
+export function usePreferredWarehouse(): string {
+  const sites = useSites();
+  const stock = useQuery({
+    queryKey: ["stock", "", ""],
+    queryFn: () => get<StockSummary>("/inventory/summary"),
+  });
+  const lines = new Map<string, number>();
+  for (const row of stock.data?.items ?? []) lines.set(row.site_code, (lines.get(row.site_code) ?? 0) + 1);
+  const busiest = [...lines.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  return busiest ?? sites.data?.warehouses[0]?.code ?? "";
 }
