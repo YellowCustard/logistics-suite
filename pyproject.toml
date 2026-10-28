@@ -22,6 +22,9 @@ dev = [
     "ruff==0.17.1",
     "import-linter==2.15",
 ]
+load = [
+    "locust==2.46.7",
+]
 
 [tool.uv]
 package = false
