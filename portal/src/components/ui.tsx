@@ -24,9 +24,18 @@ export function ErrorBox({ error }: { error: unknown }) {
         ? "Not found. It may have been removed, or it belongs to another account."
         : error.detail || error.title
       : "Something went wrong. Check your connection and try again.";
+  // Field-level problems from validation, e.g. "lines.0.qty: Input should be greater than 0".
+  const fields = error instanceof ApiError ? error.errors.filter((e) => e.row === undefined).slice(0, 10) : [];
   return (
     <div className="flash bad" role="alert">
       {message}
+      {fields.length > 0 && (
+        <ul>
+          {fields.map((e, i) => (
+            <li key={i}>{e.field ? `${e.field.replace(/^body\./, "")}: ${e.message}` : e.message}</li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

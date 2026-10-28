@@ -4,10 +4,10 @@ from decimal import Decimal
 from typing import Annotated, Literal
 
 from django.conf import settings
-from django.db.models import F, Q, QuerySet
+from django.db.models import F, Q, QuerySet, Sum
 from django.http import HttpResponse, JsonResponse
 from django.utils import timezone
-from ninja import File, Router, Schema, Status
+from ninja import File, Query, Router, Schema, Status
 from ninja.files import UploadedFile
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
@@ -420,6 +420,67 @@ def list_inventory(
         qs = qs.filter(lot=lot)
     items, next_cursor = paginate(qs, cursor, limit, max_limit=500)
     return {"items": items, "next_cursor": next_cursor}
+
+
+class StockSummaryOut(Schema):
+    site_id: uuid.UUID
+    site_code: str
+    client_id: uuid.UUID
+    item_id: uuid.UUID
+    sku: str
+    description: str
+    base_uom: str
+    lot: str
+    expiry: date | None
+    status: str
+    qty_on_hand: Decimal
+    qty_allocated: Decimal
+    qty_available: Decimal
+
+
+class StockSummaryPage(Schema):
+    items: list[StockSummaryOut]
+    truncated: bool = Field(..., description="More rows matched than were returned; narrow by site or SKU")
+
+
+SUMMARY_MAX_ROWS = 5000
+
+
+@router.get("/inventory/summary", response=StockSummaryPage)
+def inventory_summary(
+    request,
+    site_id: uuid.UUID | None = None,
+    q: Annotated[str, Query(max_length=60, description="SKU or description contains")] = "",
+):
+    """Stock on hand in base units per site, item, lot, expiry and status, whatever bins it is in. Sorted by site,
+    SKU, then earliest expiry. Up to 5000 rows."""
+    principal = principal_of(request)
+    qs = InventoryBalance.objects.filter(qty_on_hand__gt=0)
+    qs = principal.scope(qs, site_field=None if principal.is_client_scoped else "location__site_id")
+    if site_id:
+        qs = qs.filter(location__site_id=site_id)
+    if q.strip():
+        qs = qs.filter(Q(item__sku__icontains=q.strip()) | Q(item__description__icontains=q.strip()))
+    rows = list(
+        qs.values(
+            "client_id",
+            "item_id",
+            "lot",
+            "expiry",
+            "status",
+            site_id=F("location__site_id"),
+            site_code=F("location__site__code"),
+            sku=F("item__sku"),
+            description=F("item__description"),
+            base_uom=F("item__base_uom"),
+        )
+        .annotate(on_hand=Sum("qty_on_hand"), allocated=Sum("qty_allocated"))
+        .order_by("site_code", "sku", F("expiry").asc(nulls_last=True), "lot", "status")[: SUMMARY_MAX_ROWS + 1]
+    )
+    for row in rows:
+        row["qty_on_hand"], row["qty_allocated"] = row.pop("on_hand"), row.pop("allocated")
+        row["qty_available"] = row["qty_on_hand"] - row["qty_allocated"]
+    return {"items": rows[:SUMMARY_MAX_ROWS], "truncated": len(rows) > SUMMARY_MAX_ROWS}
 
 
 # --- Corrections and moves ---------------------------------------------------------------------------------------

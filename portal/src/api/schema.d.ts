@@ -117,6 +117,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/client/exceptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Client Exceptions
+         * @description For client users and client systems: the open cases (or all, with `open_only=false`) that affect the
+         *     client, newest first. Staff use `GET /exceptions`.
+         */
+        get: operations["apps_platform_api_list_client_exceptions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/clients": {
         parameters: {
             query?: never;
@@ -724,6 +745,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/inventory/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Inventory Summary
+         * @description Stock on hand in base units per site, item, lot, expiry and status, whatever bins it is in. Sorted by site,
+         *     SKU, then earliest expiry. Up to 5000 rows.
+         */
+        get: operations["apps_wms_api_inventory_summary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/items": {
         parameters: {
             query?: never;
@@ -799,6 +841,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/orders/status-counts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Order Status Counts
+         * @description Orders by status: every open order, plus orders delivered or cancelled in the last 7 days.
+         */
+        get: operations["apps_oms_api_order_status_counts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/orders/{order_id}": {
         parameters: {
             query?: never;
@@ -830,6 +892,27 @@ export interface paths {
          * @description Cancel an order until picking starts.
          */
         post: operations["apps_oms_api_cancel_order"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/orders/{order_id}/timeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Order Timeline
+         * @description The order's status changes, oldest first. Delivery detail (ETA, proof of delivery) is on its shipment:
+         *     `GET /shipments?sales_order_id=`.
+         */
+        get: operations["apps_oms_api_order_timeline"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1170,7 +1253,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Sites */
+        /**
+         * List Sites
+         * @description Staff see the sites they work at. Clients see active warehouses and their own delivery addresses.
+         */
         get: operations["apps_masterdata_api_list_sites"];
         put?: never;
         /** Create Site */
@@ -2018,6 +2104,40 @@ export interface components {
             id: string;
             /** Url */
             url: string;
+        };
+        /** ClientExceptionOut */
+        ClientExceptionOut: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Entity Id */
+            entity_id: string;
+            /** Entity Type */
+            entity_type: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Resolved At */
+            resolved_at: string | null;
+            /** Severity */
+            severity: string;
+            /** Status */
+            status: string;
+            /** Summary */
+            summary: string;
+        };
+        /** ClientExceptionPage */
+        ClientExceptionPage: {
+            /** Items */
+            items: components["schemas"]["ClientExceptionOut"][];
+            /** Next Cursor */
+            next_cursor: string | null;
         };
         /** ClientIn */
         ClientIn: {
@@ -2987,6 +3107,37 @@ export interface components {
             /** Reason */
             reason: string;
         };
+        /** OrderCountsOut */
+        OrderCountsOut: {
+            /**
+             * Counts
+             * @description Every status, zero included
+             */
+            counts: {
+                [key: string]: number;
+            };
+            /**
+             * Finished Since
+             * Format: date-time
+             * @description Delivered and cancelled orders count from this time
+             */
+            finished_since: string;
+        };
+        /** OrderEventOut */
+        OrderEventOut: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+            /** Status */
+            status: string;
+        };
         /** OrderImportOut */
         OrderImportOut: {
             /** Created */
@@ -3771,6 +3922,11 @@ export interface components {
         };
         /** SalesOrderOut */
         SalesOrderOut: {
+            /**
+             * Can Cancel
+             * @description Cancellation is possible until picking starts
+             */
+            can_cancel: boolean;
             /** Cancelled Reason */
             cancelled_reason: string;
             /**
@@ -3848,6 +4004,8 @@ export interface components {
              * Format: uuid
              */
             ship_to_id: string;
+            /** Ship To Name */
+            ship_to_name: string;
             /**
              * Site Id
              * Format: uuid
@@ -4066,6 +4224,11 @@ export interface components {
             /** Pallet Capacity */
             pallet_capacity?: number | null;
         };
+        /**
+         * SiteKind
+         * @enum {string}
+         */
+        SiteKind: "warehouse" | "depot" | "delivery_address";
         /** SiteOut */
         SiteOut: {
             /**
@@ -4146,6 +4309,54 @@ export interface components {
          * @enum {string}
          */
         StockStatus: "available" | "quarantine" | "damaged";
+        /** StockSummaryOut */
+        StockSummaryOut: {
+            /** Base Uom */
+            base_uom: string;
+            /**
+             * Client Id
+             * Format: uuid
+             */
+            client_id: string;
+            /** Description */
+            description: string;
+            /** Expiry */
+            expiry: string | null;
+            /**
+             * Item Id
+             * Format: uuid
+             */
+            item_id: string;
+            /** Lot */
+            lot: string;
+            /** Qty Allocated */
+            qty_allocated: string;
+            /** Qty Available */
+            qty_available: string;
+            /** Qty On Hand */
+            qty_on_hand: string;
+            /** Site Code */
+            site_code: string;
+            /**
+             * Site Id
+             * Format: uuid
+             */
+            site_id: string;
+            /** Sku */
+            sku: string;
+            /** Status */
+            status: string;
+        };
+        /** StockSummaryPage */
+        StockSummaryPage: {
+            /** Items */
+            items: components["schemas"]["StockSummaryOut"][];
+            /**
+             * Truncated
+             * @description More rows matched than were returned; narrow by site or SKU
+             */
+            truncated: boolean;
+        };
         /** StopIn */
         StopIn: {
             /** Shipment Ids */
@@ -4933,6 +5144,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionOut"];
+                };
+            };
+        };
+    };
+    apps_platform_api_list_client_exceptions: {
+        parameters: {
+            query?: {
+                open_only?: boolean;
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClientExceptionPage"];
                 };
             };
         };
@@ -5914,6 +6149,30 @@ export interface operations {
             };
         };
     };
+    apps_wms_api_inventory_summary: {
+        parameters: {
+            query?: {
+                site_id?: string | null;
+                /** @description SKU or description contains */
+                q?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StockSummaryPage"];
+                };
+            };
+        };
+    };
     apps_masterdata_api_list_items: {
         parameters: {
             query?: {
@@ -6024,6 +6283,9 @@ export interface operations {
                 status?: components["schemas"]["OrderStatus"] | null;
                 site_id?: string | null;
                 required_by?: string | null;
+                /** @description Order number or your reference, or the start of it */
+                q?: string;
+                newest_first?: boolean;
                 cursor?: string | null;
                 limit?: number;
             };
@@ -6064,6 +6326,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SalesOrderOut"];
+                };
+            };
+        };
+    };
+    apps_oms_api_order_status_counts: {
+        parameters: {
+            query?: {
+                site_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderCountsOut"];
                 };
             };
         };
@@ -6112,6 +6396,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SalesOrderOut"];
+                };
+            };
+        };
+    };
+    apps_oms_api_order_timeline: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                order_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderEventOut"][];
                 };
             };
         };
@@ -6508,6 +6814,8 @@ export interface operations {
                 site_id?: string | null;
                 status?: components["schemas"]["ShipmentStatus"] | null;
                 sales_order_id?: string | null;
+                /** @description Delivered on this day (South African time) */
+                delivered_on?: string | null;
                 newest_first?: boolean;
                 cursor?: string | null;
                 limit?: number;
@@ -6598,6 +6906,7 @@ export interface operations {
     apps_masterdata_api_list_sites: {
         parameters: {
             query?: {
+                kind?: components["schemas"]["SiteKind"] | null;
                 cursor?: string | null;
                 limit?: number;
             };

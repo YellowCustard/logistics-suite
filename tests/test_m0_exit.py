@@ -82,4 +82,5 @@ def test_onboard_pilot_client_through_csv_and_api(admin, admin_api, bearer_api):
     client_api = bearer_api(sdb)
     assert [i["sku"] for i in ok(client_api.get("/items"), 200)["items"]] == ["SDB-001"]
     assert ok(client_api.get(f"/rate-cards/{card_id}"), 200)["number"] == 1
-    assert client_api.get("/sites").status_code == 403
+    assert {s["kind"] for s in ok(client_api.get("/sites"), 200)["items"]} == {"warehouse"}  # where it can ship from
+    assert client_api.get("/exceptions").status_code == 403

@@ -3,7 +3,12 @@ import { NavLink, Outlet } from "react-router";
 import { useAuth } from "../auth";
 
 // Sections appear here as they are built (see the portal plan in docs).
-const SECTIONS = [{ to: "/shipments", label: "Tracking" }];
+const SECTIONS = [
+  { to: "/", label: "Home", end: true },
+  { to: "/orders", label: "Orders" },
+  { to: "/stock", label: "Stock" },
+  { to: "/shipments", label: "Tracking" },
+];
 
 export function Layout() {
   const { session, signOut } = useAuth();
@@ -16,7 +21,7 @@ export function Layout() {
         </NavLink>
         <nav aria-label="Sections">
           {SECTIONS.map((s) => (
-            <NavLink key={s.to} to={s.to}>
+            <NavLink key={s.to} to={s.to} end={s.end}>
               {s.label}
             </NavLink>
           ))}
