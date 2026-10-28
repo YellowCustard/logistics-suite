@@ -3,25 +3,31 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Annotated
 
+from django.contrib.auth import login
 from django.db.models import Count, Prefetch, Q, QuerySet, Sum
 from django.utils import timezone
 from ninja import Field, File, Form, Router, Schema, Status
 from ninja.files import UploadedFile
+from ninja.utils import check_csrf
 
 from apps.masterdata.models import Site
+from apps.platform.api import LOGIN_THROTTLE, SessionOut
 from apps.platform.apiutils import Problem, get_scoped, paginate, principal_of, require_roles, require_staff
-from apps.platform.auth import Principal
+from apps.platform.auth import Principal, principal_for_user
 from apps.platform.models import Role
 
-from . import delivery, trips
+from . import carrier_links, delivery, trips
 from .models import (
     DeliveryAttempt,
+    DeliveryOutcome,
     FailureReason,
     Shipment,
     ShipmentStatus,
     ShipmentUnit,
+    Stop,
     StopAction,
     StopShipment,
+    StopStatus,
     Trip,
     TripStatus,
     UnitDeliveryStatus,
@@ -467,6 +473,8 @@ def _road_trip(principal: Principal, trip_id: uuid.UUID) -> Trip:
             return trip
         if Role.DRIVER in principal.roles and trip.driver is not None and trip.driver.user_id == principal.id:
             return trip
+        if Role.CARRIER_DRIVER in principal.roles and carrier_links.trips_for(principal.id).filter(pk=trip.pk).exists():
+            return trip
     raise Problem(404, "Not found")
 
 
@@ -527,10 +535,14 @@ def my_trips(request):
     """The signed-in driver's trips: being planned, on the road, or finished in the last day. The PWA keeps the
     answer on the device so the driver can work without signal."""
     principal = principal_of(request)
-    if Role.DRIVER not in principal.roles:
+    if Role.DRIVER in principal.roles:
+        qs = Trip.objects.filter(driver__user_id=principal.id)
+    elif Role.CARRIER_DRIVER in principal.roles:
+        qs = carrier_links.trips_for(principal.id)
+    else:
         raise Problem(403, "Forbidden", "Drivers only.")
     recent = timezone.now() - timedelta(days=1)
-    qs = Trip.objects.filter(driver__user_id=principal.id).filter(
+    qs = qs.filter(
         Q(status__in=[TripStatus.PLANNING, TripStatus.DISPATCHED])
         | Q(status=TripStatus.COMPLETED, completed_at__gte=recent)
     )
@@ -655,3 +667,191 @@ def complete(request, trip_id: uuid.UUID, body: CompleteIn):
     principal = principal_of(request)
     trip = _road_trip(principal, trip_id)
     return _road(delivery.complete(trip.pk, at=body.completed_at, user_id=principal.id))
+
+
+# --- Carrier links -----------------------------------------------------------------------------------------------
+
+
+class CarrierLinkIn(Schema):
+    driver_name: str = Field("", max_length=120)
+    valid_hours: int = Field(48, ge=1, le=168)
+
+
+class CarrierLinkOut(Schema):
+    id: uuid.UUID
+    url: str
+    expires_at: datetime
+
+
+class RedeemIn(Schema):
+    token: str = Field(..., min_length=20, max_length=100)
+
+
+@router.post("/trips/{trip_id}/carrier-links", response={201: CarrierLinkOut})
+def create_carrier_link(request, trip_id: uuid.UUID, body: CarrierLinkIn):
+    """A sign-in link for the subcontractor's driver, for this trip only. Send it to the driver yourself (SMS,
+    WhatsApp); it is shown once. A new link replaces the old one."""
+    principal = _writable_trip(request)
+    trip = get_scoped(_trips(principal), trip_id)
+    link, token = carrier_links.create(
+        trip.pk, valid_for=timedelta(hours=body.valid_hours), driver_name=body.driver_name, created_by=principal.id
+    )
+    url = request.build_absolute_uri("/scanner/") + f"#link/{token}"
+    return Status(201, {"id": link.pk, "url": url, "expires_at": link.expires_at})
+
+
+@router.delete("/trips/{trip_id}/carrier-links", response={204: None})
+def revoke_carrier_links(request, trip_id: uuid.UUID):
+    """Stop every link for the trip; a driver signed in through one is signed out."""
+    principal = _writable_trip(request)
+    trip = get_scoped(_trips(principal), trip_id)
+    carrier_links.revoke_all(trip.pk)
+    return Status(204, None)
+
+
+@router.post("/carrier-links/redeem", auth=None, response=SessionOut, throttle=LOGIN_THROTTLE)
+def redeem_carrier_link(request, body: RedeemIn):
+    if check_csrf(request) is not None:
+        raise Problem(403, "CSRF check failed", "Reload the page and open the link again.")
+    link, user = carrier_links.redeem(body.token)
+    login(request, user, backend="django.contrib.auth.backends.ModelBackend")
+    request.session.set_expiry(link.expires_at)
+    principal = principal_for_user(user)
+    return SessionOut(
+        user_id=principal.id, email=principal.label, roles=sorted(principal.roles), all_sites=False, site_ids=[]
+    )
+
+
+# --- Tracking for clients ----------------------------------------------------------------------------------------
+
+
+class DocumentRef(Schema):
+    id: uuid.UUID
+    kind: str
+    sha256: str
+    mime: str
+    captured_at: datetime
+
+
+class PodOut(Schema):
+    shipment_id: uuid.UUID
+    trip_number: str
+    outcome: str
+    recipient_name: str
+    reason: str
+    note: str
+    captured_at: datetime
+    latitude: Decimal | None
+    longitude: Decimal | None
+    signature: DocumentRef | None
+    photos: list[DocumentRef]
+    units: list[RoadUnitOut]
+
+
+class TrackingEvent(Schema):
+    at: datetime
+    what: str
+    detail: str = ""
+
+
+class TrackingOut(Schema):
+    shipment_id: uuid.UUID
+    number: str
+    order_number: str
+    client_ref: str
+    status: str
+    ship_to_name: str
+    required_by: date | None
+    trip_number: str | None
+    vehicle_registration: str | None
+    stops_before: int | None = Field(None, description="Drop stops still to do before this one, while on the road")
+    eta: datetime | None = Field(None, description="Estimated arrival; needs telematics")
+    events: list[TrackingEvent]
+    pod: PodOut | None
+
+
+def _attempts(shipment: Shipment) -> list[DeliveryAttempt]:
+    stop_ids = StopShipment.objects.filter(shipment=shipment, action=StopAction.DROP).values("stop_id")
+    return list(
+        DeliveryAttempt.objects.filter(stop_id__in=stop_ids)
+        .select_related("trip", "signature")
+        .prefetch_related("photos__document")
+        .order_by("captured_at")
+    )
+
+
+def _pod(shipment: Shipment, attempt: DeliveryAttempt) -> dict:
+    units = ShipmentUnit.objects.filter(shipment=shipment).order_by("sscc")
+    return {
+        "shipment_id": shipment.pk,
+        "trip_number": attempt.trip.number,
+        "outcome": attempt.outcome,
+        "recipient_name": attempt.recipient_name,
+        "reason": attempt.reason,
+        "note": attempt.note,
+        "captured_at": attempt.captured_at,
+        "latitude": attempt.latitude,
+        "longitude": attempt.longitude,
+        "signature": attempt.signature,
+        "photos": [p.document for p in attempt.photos.all()],
+        "units": list(units) if attempt.outcome == DeliveryOutcome.DELIVERED else [],
+    }
+
+
+@router.get("/shipments/{shipment_id}/tracking", response=TrackingOut)
+def track_shipment(request, shipment_id: uuid.UUID):
+    """Where a shipment is, what happened to it, and its proof of delivery. Evidence files download from
+    /documents/{id}/download."""
+    shipment = get_scoped(_shipments(principal_of(request)), shipment_id)
+    events = [TrackingEvent(at=shipment.created_at, what="order_received")]
+    if shipment.packed_at:
+        events.append(TrackingEvent(at=shipment.packed_at, what="packed"))
+    links = list(
+        StopShipment.objects.filter(shipment=shipment, action=StopAction.DROP)
+        .exclude(trip__status=TripStatus.CANCELLED)
+        .select_related("trip__vehicle", "stop")
+        .order_by("created_at")
+    )
+    for link in links:
+        if link.trip.dispatched_at:
+            events.append(TrackingEvent(at=link.trip.dispatched_at, what="dispatched", detail=link.trip.number))
+        if link.stop.arrived_at and link.stop.arrival_source != "pod":
+            events.append(TrackingEvent(at=link.stop.arrived_at, what="arrived", detail=link.trip.number))
+    attempts = _attempts(shipment)
+    for attempt in attempts:
+        if attempt.outcome == DeliveryOutcome.DELIVERED:
+            events.append(TrackingEvent(at=attempt.captured_at, what="delivered", detail=attempt.recipient_name))
+        else:
+            events.append(TrackingEvent(at=attempt.captured_at, what="delivery_failed", detail=attempt.reason))
+    current = links[-1] if links else None
+    stops_before = None
+    if current and current.trip.status == TripStatus.DISPATCHED and current.stop.status != StopStatus.DONE:
+        stops_before = (
+            Stop.objects.filter(trip=current.trip, seq__gt=1, seq__lt=current.stop.seq)
+            .exclude(status=StopStatus.DONE)
+            .count()
+        )
+    return {
+        "shipment_id": shipment.pk,
+        "number": shipment.number,
+        "order_number": shipment.order_number,
+        "client_ref": shipment.client_ref,
+        "status": shipment.status,
+        "ship_to_name": shipment.ship_to.name,
+        "required_by": shipment.required_by,
+        "trip_number": current.trip.number if current else None,
+        "vehicle_registration": current.trip.vehicle.registration if current and current.trip.vehicle else None,
+        "stops_before": stops_before,
+        "events": sorted(events, key=lambda e: e.at),
+        "pod": _pod(shipment, attempts[-1]) if attempts else None,
+    }
+
+
+@router.get("/shipments/{shipment_id}/pod", response=PodOut)
+def shipment_pod(request, shipment_id: uuid.UUID):
+    """The latest delivery attempt: the proof of delivery, or why it failed."""
+    shipment = get_scoped(_shipments(principal_of(request)), shipment_id)
+    attempts = _attempts(shipment)
+    if not attempts:
+        raise Problem(404, "No delivery yet", f"{shipment.number} hasn't reached its delivery stop.")
+    return _pod(shipment, attempts[-1])

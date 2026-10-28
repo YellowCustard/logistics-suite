@@ -258,3 +258,24 @@ class DeliveryPhoto(Audited, BaseModel):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["attempt", "document"], name="delivery_photo_uq")]
+
+
+class CarrierLink(Audited, BaseModel):
+    """A link a dispatcher sends a subcontractor's driver: it signs them in to the driver PWA for one trip only.
+
+    Only the SHA-256 of the token is stored. Redeeming the link creates (once) a user with the carrier_driver role
+    whose session ends when the link expires.
+    """
+
+    trip = models.ForeignKey(Trip, on_delete=models.CASCADE, related_name="carrier_links")
+    carrier = models.ForeignKey(Party, on_delete=models.PROTECT, related_name="+")
+    token_sha256 = models.CharField(max_length=64, unique=True)
+    driver_name = models.CharField(max_length=120, blank=True)
+    expires_at = models.DateTimeField()
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.UUIDField(null=True, blank=True)
+    user_id = models.UUIDField(null=True, blank=True, unique=True, help_text="platform User created on first use")
+    redeemed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["trip", "revoked_at"], name="carrier_link_trip_idx")]
