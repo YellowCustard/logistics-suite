@@ -97,4 +97,8 @@ const megabyte = new Intl.NumberFormat("en-ZA", { maximumFractionDigits: 1 });
 export const fileSize = (bytes: number) =>
   bytes < 1024 ? `${bytes} B` : bytes < 1024 ** 2 ? `${Math.round(bytes / 1024)} KB` : `${megabyte.format(bytes / 1024 ** 2)} MB`;
 
+export const CLIENT_ROLE: Record<string, string> = { client_admin: "Administrator", client_user: "User" };
+
+export const DELIVERY_STATUS: Record<string, string> = { pending: "Pending", delivered: "Delivered", dead: "Gave up" };
+
 export const label = (labels: Record<string, string>, value: string) => labels[value] ?? value.replace(/_/g, " ");

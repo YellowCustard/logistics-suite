@@ -117,6 +117,15 @@ def create_api_client(*, name: str, client_id: uuid.UUID, scopes: list[str] | No
     return api_client, secret
 
 
+def rotate_secret(api_client: ApiClient) -> str:
+    """A new secret for the same key id; the old secret stops working at once. Tokens already issued stay valid
+    until they expire (API_TOKEN_TTL_SECONDS); revoke the credential to cut them off immediately."""
+    secret = secrets.token_urlsafe(32)
+    api_client.secret_hash = make_password(secret)
+    api_client.save(update_fields=["secret_hash", "updated_at"])
+    return secret
+
+
 def issue_token(key_id: str, secret: str) -> tuple[str, int] | None:
     api_client = ApiClient.objects.filter(key_id=key_id, is_active=True).first()
     if api_client is None:

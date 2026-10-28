@@ -1,6 +1,6 @@
 import { NavLink, Outlet } from "react-router";
 
-import { useAuth } from "../auth";
+import { useAuth, useIsClientAdmin } from "../auth";
 
 // Sections appear here as they are built (see the portal plan in docs).
 const SECTIONS = [
@@ -15,6 +15,7 @@ const SECTIONS = [
 
 export function Layout() {
   const { session, signOut } = useAuth();
+  const sections = useIsClientAdmin() ? [...SECTIONS, { to: "/settings", label: "Settings" }] : SECTIONS;
   return (
     <>
       <header className="bar">
@@ -23,7 +24,7 @@ export function Layout() {
           <span className="title">Portal</span>
         </NavLink>
         <nav aria-label="Sections">
-          {SECTIONS.map((s) => (
+          {sections.map((s) => (
             <NavLink key={s.to} to={s.to} end={s.end}>
               {s.label}
             </NavLink>
