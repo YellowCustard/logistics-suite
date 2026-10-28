@@ -122,6 +122,12 @@ def transfer(
 ) -> tuple[InventoryMovement, InventoryMovement]:
     if qty <= 0:
         raise ValueError("qty must be positive")
+    if not transaction.get_connection().in_atomic_block:
+        raise RuntimeError("ledger.transfer() must run inside transaction.atomic()")
+    # Lock both balances up front, in id order: two opposite transfers between the same bins would otherwise each
+    # hold one row and wait for the other (a deadlock the load test found with scanners moving stock both ways).
+    ids = sorted(InventoryBalance.objects.get_or_create(**key.filter())[0].pk for key in (source, target))
+    list(InventoryBalance.objects.select_for_update().filter(pk__in=ids).order_by("pk").values_list("pk"))
     out = post(source, -qty, kind=kind, command_id=command_id, **meta)
     into = post(target, qty, kind=kind, command_id=command_id, **meta)
     return out, into
