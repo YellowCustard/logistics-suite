@@ -57,6 +57,36 @@ jobs:
       - name: Tests
         run: uv run pytest --create-db
 
+  portal:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: portal
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.32"
+          python-version: "3.13"
+      - run: uv sync --locked
+        working-directory: .
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: portal/package-lock.json
+      - run: npx -y npm@11.21.0 ci --no-audit --no-fund
+      - name: API types match the API
+        run: |
+          npm run api-types
+          git diff --exit-code -- src/api/schema.d.ts || {
+            echo "::error::portal/src/api/schema.d.ts is stale; run 'npm run api-types' in portal/ and commit it"; exit 1; }
+      - name: Tests
+        run: npm test
+      - name: Build (type-checks first)
+        run: npm run build
+
   image:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

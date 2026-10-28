@@ -9,3 +9,6 @@ staticfiles
 tests
 docs
 .env
+portal/node_modules
+portal/openapi.json
+apps/portal/static/portal

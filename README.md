@@ -3,8 +3,8 @@
 Nuronteq: contract warehousing, transport and billing for a South African 3PL. A Django modular monolith on one
 PostgreSQL database, built milestone by milestone from the Phase 1 Delivery Specification. Done so far:
 M0 (platform services, master data, bins), M1 (ASNs, receiving, inventory ledger, putaway, cycle counts,
-the offline scanner PWA), M2 (sales orders, allocation, waves, picking, packing, webhooks) and the first part of
-M3 (shipments, trips, load scan, dispatch, proof of delivery).
+the offline scanner PWA), M2 (sales orders, allocation, waves, picking, packing, webhooks) and most of
+M3 (shipments, trips, load scan, dispatch, proof of delivery, telematics, and the client portal's first screens).
 
 ## Layout
 
@@ -16,6 +16,8 @@ M3 (shipments, trips, load scan, dispatch, proof of delivery).
 | `apps/wms` | Bins, receiving, the inventory ledger (`ledger.py`, the only code that changes stock), putaway, allocation (`allocation.py`, FEFO then FIFO), waves and picking (`picking.py`), packing into handling units with SSCC labels (`packing.py`, `sscc.py`, `labels.py`) |
 | `apps/tms` | Transport: shipments built from order and packing events (`shipments.py`), trips with stops, own-fleet or carrier assignment, load scanning and dispatch (`trips.py`), arrival, proof of delivery, failed delivery and trip completion (`delivery.py`, also as offline sync commands), vehicle positions, geofence arrival and ETA (`telematics.py`) |
 | `apps/integrations` | Vendor adapters behind the protocols in `ports.py`. `telematics/fake.py` stands in for Powerfleet MiX until credentials arrive |
+| `apps/portal` | Serves the client portal page at `/portal/` (the built React app, with a strict CSP); no business logic |
+| `portal` | Client portal source: React, TypeScript and Vite. Builds into `apps/portal/static/portal`; API types are generated from the OpenAPI schema (`src/api/schema.d.ts`) |
 | `loadtest` | Locust load test (`locustfile.py`); fixtures from `manage.py seed_load`, results in `docs/` |
 | `config` | Settings (environment-driven), URLs, API root |
 | `tests` | pytest suite against real PostgreSQL, including the M0 exit test (onboarding through CSV and the API) and the M2 exit test (`test_m2_exit.py`: a simulated week of 20 orders a day received, picked and packed through the API only) |
@@ -41,6 +43,13 @@ uv run python manage.py runserver        # API docs at /api/v1/docs (log in at /
 uv run python manage.py run_outbox       # second terminal: event delivery worker
 ```
 
+The client portal needs Node 22 and a build once (the container image builds it itself):
+
+```bash
+cd portal && npx -y npm@11.21.0 ci && npm run build   # then open /portal/ on runserver
+npm run dev                              # or: live reload on :5173, proxying /api to runserver on :8000
+```
+
 Or everything in containers: `cp .env.example .env`, fill in the secrets, then `docker compose up --build`.
 
 Staging and production run on a self-managed xneelo Cloud instance: see [docs/staging.md](docs/staging.md).
@@ -52,9 +61,12 @@ uv run ruff format --check . && uv run ruff check .
 uv run lint-imports
 uv run python manage.py makemigrations --check --dry-run
 uv run pytest                            # needs a reachable PostgreSQL (DATABASE_URL); creates test_logistics
+cd portal && npm test && npm run build      # portal: vitest, then type-check and build
+cd portal && npm run api-types            # after any API change: regenerate src/api/schema.d.ts and commit it
 ```
 
-CI (`.github/workflows/ci.yml`) runs all of the above plus `check --deploy` and a container build.
+CI (`.github/workflows/ci.yml`) runs all of the above plus `check --deploy`, a check that the portal's API types
+match the API, and a container build.
 
 ## API conventions
 
@@ -94,6 +106,7 @@ CI (`.github/workflows/ci.yml`) runs all of the above plus `check --deploy` and 
 | On the road | The driver (a user with the `driver` role, linked from their Person record) sees their trips at `GET /driver/trips`. At a stop: arrive (`POST /trips/{id}/stops/{stop}/arrive`), upload the signature and photos (`…/evidence`, multipart, kind `pod_signature` or `pod_photo`; the same bytes again return the same document), then record the POD (`…/pod`: recipient name, the documents, and every unit scanned with `delivered`, `damaged` or `refused`; unscanned units count as missing) or a failure (`…/failed`: reason code, note, photos). `POST /trips/{id}/complete` once every stop is recorded: failed shipments come back unloaded and ready to plan. The same actions are sync commands (`trip.arrive`, `trip.pod`, `trip.failed`, `trip.complete`) and carry the device's time. A dispatcher at the site can do any of it, for example keying in a carrier's paper POD (leave `units` out to mark all delivered). In the PWA (`/scanner/`), a user whose only role is `driver` gets the driver menu instead of the warehouse one: their trips, stops with a maps link, arrive, deliver (scan units, recipient, finger signature, photos) and could-not-deliver. It all works offline; signatures and photos wait in IndexedDB (photos shrunk to 1600 px JPEG) and upload just before the POD that uses them. Exceptions open `delivery.exception` or `delivery.failed` cases; clients get `oms.sales_order.delivered` and `tms.shipment.delivery_failed` webhooks. |
 | Carrier drivers | For a carrier trip, a dispatcher creates a sign-in link (`POST /trips/{id}/carrier-links`, 1 to 168 hours, default 48) and sends it to the driver. The link is shown once; only its SHA-256 is stored, and a new link replaces the old one. Opening it signs the driver in to the driver PWA for that trip only (role `carrier_driver`, no site or client access), until the link expires, the trip finishes, or `DELETE /trips/{id}/carrier-links` revokes it (which also signs the driver out). |
 | Tracking | `GET /shipments/{id}/tracking` (clients see their own; staff their sites): status, trip, stops still ahead, and a timeline (received, packed, dispatched, arrived, delivered or failed). `GET /shipments/{id}/pod` gives the latest attempt: recipient, time, GPS, reason, unit outcomes and the evidence documents, which download from `/documents/{id}/download`. `eta` is filled while the trip is on the road and its vehicle reported in the last 15 minutes. |
+| Client portal | Client users (roles `client_admin`, `client_user`, created in the admin with a password and their client) sign in at `/portal/`. Staff are refused there and use the scanner and the admin; client users are refused on the scanner. **Tracking** lists the client's shipments newest first with a status filter; a shipment shows the timeline, ETA while on the road, and the proof of delivery with the signature and photos to view and download. Everything it shows comes from `/api/v1` under the client user's own scope. |
 | Telematics | `TELEMATICS_ADAPTER` names the vendor adapter; the `telematics` service polls it every `TELEMATICS_POLL_SECONDS` and idles when it is empty. Vendors that push send to `POST /api/v1/integrations/telematics/webhook`, checked by the adapter's signature (the fake adapter: HMAC-SHA256 of the body with `TELEMATICS_WEBHOOK_SECRET` in `X-Telematics-Signature`). `manage.py sync_telematics_vehicles` links vendor units to vehicles by registration; a unit no vehicle is linked to opens a `telematics.unknown_vehicle` case. A dispatched vehicle at walking pace inside a drop stop's geofence (`Site.geofence_radius_m` around the site's coordinates) marks the stop arrived; set `GEOFENCE_AUTO_ARRIVE=0` to turn that off. Staff trip detail shows the last fix and an ETA per stop. Positions are kept `TELEMATICS_RETENTION_DAYS` (395). |
 | Fleet simulator (demo only) | With dispatched own-fleet trips and coordinates on their sites: `deploy/ops.sh manage simulate_fleet --link` drives each vehicle toward its next stop with a fix every 30 s, through the same ingest as live data, until Ctrl-C. `--link` gives unlinked vehicles a `sim-<registration>` telematics ID; clear those before go-live. |
 | Load test | Against a staging-like stack, never production: `manage.py seed_load --not-production --history-hours 24` (6 load sites, 60 operators sharing `LOAD_PASSWORD`, 250 vehicles on units LOAD-001..250, a day of positions), then `uv run --group load locust -f loadtest/locustfile.py --headless -H https://<host> -u 310 -r 5 -t 15m`. Set `LOGIN_RATE_LIMIT=1000/m` on the server for the run. It fails on any error or a p95/p99 over `LOAD_P95_MS`/`LOAD_P99_MS`. M3 results: `docs/loadtest-m3.md`. |
@@ -211,5 +224,9 @@ CI (`.github/workflows/ci.yml`) runs all of the above plus `check --deploy` and 
   old. Clients see the ETA only; the vehicle's position is shown to staff.
 - On TimescaleDB, positions are a hypertable (1-day chunks, compressed after 7 days, dropped after 395 days); its
   primary key is `(id, recorded_at)`. On plain PostgreSQL the poller deletes expired positions hourly.
+- The client portal is a React app built with Vite, served by Django from the same origin with session auth and
+  CSRF (no tokens in the browser, no CORS). Node is needed only to build it. It is being built out in steps; this
+  first step has sign-in and Tracking. Statements wait for billing (M4).
+- `POST /auth/session` takes `app` (`scanner`, the default, or `portal`): each app accepts only its own kind of user.
 - Positions are de-duplicated on (vehicle, fix time). Positions with no GPS lock (0, 0), out-of-range or non-finite
   coordinates, or times more than 10 minutes ahead are dropped.

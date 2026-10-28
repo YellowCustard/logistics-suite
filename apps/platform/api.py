@@ -1,12 +1,13 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from django.conf import settings
 from django.contrib.auth import authenticate, login, logout
 from django.db import connection
 from django.http import FileResponse
+from django.middleware.csrf import get_token
 from django.utils import timezone
 from ninja import Field, File, Form, Router, Schema, Status
 from ninja.files import UploadedFile
@@ -53,6 +54,7 @@ def token(request, grant_type: Form[str], client_id: Form[str], client_secret: F
 class LoginIn(Schema):
     email: str = Field(..., max_length=254)
     password: str = Field(..., max_length=256)
+    app: Literal["scanner", "portal"] = Field("scanner", description="Staff use the scanner; clients the portal")
 
 
 class SessionOut(Schema):
@@ -84,10 +86,20 @@ def create_session(request, body: LoginIn):
         raise Problem(401, "Sign-in failed", "Wrong email or password.")
     login(request, user)  # rotates the session key and the CSRF token
     request.auth = principal_for_user(user)
-    if request.auth.is_client_scoped:
+    if body.app == "scanner" and request.auth.is_client_scoped:
         logout(request)
         raise Problem(403, "Forbidden", "Client users sign in to the client portal, not the scanner.")
+    if body.app == "portal" and not request.auth.is_client_scoped:
+        logout(request)
+        raise Problem(403, "Forbidden", "The portal is for client users; staff use the scanner and the admin.")
     return _session_out(request)
+
+
+@auth_router.get("/csrf", auth=None, response={204: None})
+def csrf_cookie(request):
+    """Sets the CSRF cookie that session sign-in needs; for front ends served from somewhere other than Django."""
+    get_token(request)
+    return Status(204, None)
 
 
 @auth_router.get("/session", response=SessionOut)

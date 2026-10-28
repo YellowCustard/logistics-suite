@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     "apps.wms",
     "apps.tms",
     "apps.scanner",
+    "apps.portal",
 ]
 
 MIDDLEWARE = [

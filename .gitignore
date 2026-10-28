@@ -9,3 +9,6 @@ staticfiles/
 *.sqlite3
 .DS_Store
 backup.env
+# Client portal: dependencies and build output (built in CI and the Docker image)
+portal/node_modules/
+apps/portal/static/portal/
