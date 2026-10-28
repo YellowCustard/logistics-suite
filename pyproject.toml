@@ -52,12 +52,18 @@ include_external_packages = false
 name = "Platform is the bottom layer and imports no business module"
 type = "forbidden"
 source_modules = ["apps.platform"]
-forbidden_modules = ["apps.masterdata", "apps.oms", "apps.wms", "apps.tms"]
+forbidden_modules = ["apps.masterdata", "apps.oms", "apps.wms", "apps.tms", "apps.integrations"]
 
 [[tool.importlinter.contracts]]
 name = "The scanner shell holds no business logic; it talks to the API"
 type = "forbidden"
 source_modules = ["apps.scanner"]
+forbidden_modules = ["apps.masterdata", "apps.oms", "apps.wms", "apps.tms", "apps.integrations"]
+
+[[tool.importlinter.contracts]]
+name = "Vendor adapters translate vendor APIs and hold no business logic"
+type = "forbidden"
+source_modules = ["apps.integrations"]
 forbidden_modules = ["apps.masterdata", "apps.oms", "apps.wms", "apps.tms"]
 
 [[tool.importlinter.contracts]]

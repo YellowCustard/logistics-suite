@@ -116,8 +116,8 @@ class SiteKind(models.TextChoices):
 class Site(Audited, BaseModel):
     """Warehouses, depots and delivery addresses.
 
-    Coordinates are plain decimals in M0; a PostGIS geography column and geofence polygon arrive with
-    geofenced arrival (M3), when the PostGIS extension is enabled.
+    Coordinates are plain decimals. Geofenced arrival (M3) uses a circle of geofence_radius_m around them;
+    PostGIS polygons wait until a site needs a shape a circle can't describe.
     """
 
     code = models.CharField(max_length=20, unique=True)

@@ -154,6 +154,21 @@ WEBHOOK_TIMEOUT_SECONDS = float(env("WEBHOOK_TIMEOUT_SECONDS", "10"))
 WEBHOOK_MAX_ATTEMPTS = int(env("WEBHOOK_MAX_ATTEMPTS", "10"))
 WEBHOOK_ALLOW_INSECURE = env_bool("WEBHOOK_ALLOW_INSECURE", False)
 WEBHOOK_ALLOW_PRIVATE_NETWORKS = env_bool("WEBHOOK_ALLOW_PRIVATE_NETWORKS", False)
+# Telematics. TELEMATICS_ADAPTER is the dotted path of a TelematicsPort implementation; empty means no polling.
+# Until MiX Integrate credentials arrive, staging can use "apps.integrations.telematics.fake.FakeTelematics" with
+# the fleet simulator. The webhook secret signs vendor pushes to /api/v1/integrations/telematics/webhook.
+TELEMATICS_ADAPTER = env("TELEMATICS_ADAPTER", "")
+TELEMATICS_WEBHOOK_SECRET = env("TELEMATICS_WEBHOOK_SECRET", "")
+TELEMATICS_POLL_SECONDS = int(env("TELEMATICS_POLL_SECONDS", "60"))
+# Positions older than this are deleted (POPIA: 13 months, as in the driver tracking notice).
+TELEMATICS_RETENTION_DAYS = int(env("TELEMATICS_RETENTION_DAYS", "395"))
+# Feature flag: mark a stop arrived when the trip's vehicle enters the site's geofence.
+GEOFENCE_AUTO_ARRIVE = env_bool("GEOFENCE_AUTO_ARRIVE", True)
+# Rough ETA until a routing engine is connected: straight-line distance x road factor at this average speed, plus
+# a fixed time at each stop still ahead.
+ETA_AVERAGE_KMH = float(env("ETA_AVERAGE_KMH", "40"))
+ETA_ROAD_FACTOR = float(env("ETA_ROAD_FACTOR", "1.3"))
+ETA_MINUTES_PER_STOP = int(env("ETA_MINUTES_PER_STOP", "15"))
 # Endpoints that authenticate or deduplicate differently (token grant, vendor webhooks, offline sync).
 IDEMPOTENCY_EXEMPT_PREFIXES = ["/api/v1/auth/", "/api/v1/integrations/", "/api/v1/sync/"]
 

@@ -9,6 +9,7 @@ from django.db import models
 from django.db.models import Q
 
 from apps.masterdata.models import Item, Party, Person, Site, Vehicle
+from apps.platform.ids import uuid7
 from apps.platform.models import Audited, BaseModel, Document
 
 QTY = {"max_digits": 14, "decimal_places": 3}
@@ -279,3 +280,39 @@ class CarrierLink(Audited, BaseModel):
 
     class Meta:
         indexes = [models.Index(fields=["trip", "revoked_at"], name="carrier_link_trip_idx")]
+
+
+class VehiclePosition(models.Model):
+    """One telematics fix. High volume (a vehicle every 30-60 s), so no audit trail, no outbox event, and no
+    version column; on TimescaleDB the table is a hypertable on `recorded_at` (see migration 0004)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid7, editable=False)
+    # No separate index: vehicle_position_uq leads with vehicle and serves "latest fix for this vehicle".
+    vehicle = models.ForeignKey(Vehicle, on_delete=models.CASCADE, related_name="+", db_index=False)
+    recorded_at = models.DateTimeField()
+    latitude = models.FloatField()
+    longitude = models.FloatField()
+    speed_kmh = models.FloatField(null=True, blank=True)
+    heading = models.FloatField(null=True, blank=True)
+    ignition = models.BooleanField(null=True, blank=True)
+    received_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            # Also the de-duplication key for re-polled windows and repeated webhooks.
+            models.UniqueConstraint(fields=["vehicle", "recorded_at"], name="vehicle_position_uq"),
+            models.CheckConstraint(
+                condition=Q(latitude__gte=-90, latitude__lte=90, longitude__gte=-180, longitude__lte=180),
+                name="vehicle_position_on_earth",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.vehicle_id} @ {self.recorded_at:%Y-%m-%d %H:%M:%S}"
+
+
+class TelematicsCursor(BaseModel):
+    """High-water mark of the vendor poll: positions up to `polled_until` have been fetched."""
+
+    name = models.CharField(max_length=40, unique=True)
+    polled_until = models.DateTimeField()
