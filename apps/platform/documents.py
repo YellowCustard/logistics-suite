@@ -19,6 +19,14 @@ ALLOWED_MIME = {"image/jpeg", "image/png", "image/webp", "application/pdf", "tex
 MAX_BYTES = 10 * 1024 * 1024
 
 
+def sha256_of(upload: UploadedFile) -> str:
+    digest = hashlib.sha256()
+    for chunk in upload.chunks():
+        digest.update(chunk)
+    upload.seek(0)
+    return digest.hexdigest()
+
+
 def store(
     upload: UploadedFile,
     *,
@@ -37,11 +45,7 @@ def store(
     if upload.size is None or upload.size > MAX_BYTES:
         raise Problem(413, "File too large", f"Maximum {MAX_BYTES // (1024 * 1024)} MB.")
 
-    digest = hashlib.sha256()
-    for chunk in upload.chunks():
-        digest.update(chunk)
-    upload.seek(0)
-
+    digest = sha256_of(upload)
     now = timezone.now()
     ext = mimetypes.guess_extension(mime) or ""
     key = f"documents/{now:%Y/%m}/{uuid7()}{ext}"
@@ -53,7 +57,7 @@ def store(
                 kind=kind,
                 storage_key=saved_key,
                 original_name=(upload.name or "")[:255],
-                sha256=digest.hexdigest(),
+                sha256=digest,
                 mime=mime,
                 size_bytes=upload.size,
                 captured_at=captured_at or now,

@@ -35,3 +35,8 @@ def record_dispatched(event: Event) -> None:
             trip_number=event.payload["number"],
             shipment_number=shipment["number"],
         )
+
+
+@subscribe("tms.shipment.delivered", consumer="oms.record_delivered")
+def record_delivered(event: Event) -> None:
+    services.record_delivered(uuid.UUID(event.payload["sales_order_id"]), payload=event.payload)

@@ -80,6 +80,7 @@ def attach_unit(payload: dict) -> ShipmentUnit:
             weight_kg=weight,
             volume_m3=volume,
             cartons=int(payload.get("cartons") or 1),
+            contents=payload["contents"],
         )
         lines = {line.order_line_id: line for line in shipment.lines.select_for_update()}
         for content in payload["contents"]:

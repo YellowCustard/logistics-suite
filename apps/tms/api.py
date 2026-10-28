@@ -1,18 +1,31 @@
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Annotated
 
-from django.db.models import Count, Q, QuerySet
-from ninja import Field, Router, Schema, Status
+from django.db.models import Count, Prefetch, Q, QuerySet, Sum
+from django.utils import timezone
+from ninja import Field, File, Form, Router, Schema, Status
+from ninja.files import UploadedFile
 
 from apps.masterdata.models import Site
 from apps.platform.apiutils import Problem, get_scoped, paginate, principal_of, require_roles, require_staff
 from apps.platform.auth import Principal
 from apps.platform.models import Role
 
-from . import trips
-from .models import Shipment, ShipmentStatus, ShipmentUnit, StopShipment, Trip, TripStatus
+from . import delivery, trips
+from .models import (
+    DeliveryAttempt,
+    FailureReason,
+    Shipment,
+    ShipmentStatus,
+    ShipmentUnit,
+    StopAction,
+    StopShipment,
+    Trip,
+    TripStatus,
+    UnitDeliveryStatus,
+)
 
 router = Router(tags=["transport"])
 
@@ -202,6 +215,8 @@ class LoadedUnitOut(Schema):
     loaded_at: datetime | None
     units_total: int
     units_loaded: int
+    loaded_weight_kg: Decimal
+    warning: str | None = Field(None, description="Set when the load is heavier than the vehicle's rated capacity")
 
 
 def _trips(principal: Principal) -> QuerySet:
@@ -349,12 +364,17 @@ def assign(request, trip_id: uuid.UUID, body: AssignIn):
 
 
 def _loaded(unit: ShipmentUnit, trip: Trip) -> dict:
+    weight = ShipmentUnit.objects.filter(loaded_trip=trip).aggregate(total=Sum("weight_kg"))["total"] or Decimal(0)
+    capacity = trip.vehicle.capacity_kg if trip.vehicle_id and trip.vehicle else None
+    warning = f"Loaded {weight} kg is over the vehicle's {capacity} kg." if capacity and weight > capacity else None
     return {
         "sscc": unit.sscc,
         "shipment_id": unit.shipment_id,
         "loaded_trip_id": unit.loaded_trip_id,
         "loaded_at": unit.loaded_at,
         **_unit_counts(trip),
+        "loaded_weight_kg": weight,
+        "warning": warning,
     }
 
 
@@ -386,3 +406,252 @@ def cancel(request, trip_id: uuid.UUID):
     principal = _writable_trip(request)
     trip = get_scoped(_trips(principal), trip_id)
     return _detail(trips.cancel(trip.pk), principal)
+
+
+# --- On the road ------------------------------------------------------------------------------------------------
+# The trip's own driver acts from the PWA (online or through sync); a dispatcher at the trip's site can act for
+# them, for instance keying in a carrier's paper POD.
+
+Latitude = Annotated[Decimal, Field(ge=-90, le=90, max_digits=9, decimal_places=6)]
+Longitude = Annotated[Decimal, Field(ge=-180, le=180, max_digits=9, decimal_places=6)]
+
+
+class RoadUnitOut(Schema):
+    sscc: str
+    kind: str
+    cartons: int
+    weight_kg: Decimal
+    delivery_status: str
+
+
+class RoadShipmentOut(Schema):
+    id: uuid.UUID
+    number: str
+    order_number: str
+    client_ref: str
+    status: str
+    units: list[RoadUnitOut]
+
+
+class RoadStopOut(Schema):
+    id: uuid.UUID
+    seq: int
+    status: str
+    site_code: str
+    site_name: str
+    address: str
+    latitude: Decimal | None
+    longitude: Decimal | None
+    window_from: datetime | None
+    window_to: datetime | None
+    arrived_at: datetime | None
+    outcome: str | None
+    shipments: list[RoadShipmentOut]
+
+
+class RoadTripOut(Schema):
+    id: uuid.UUID
+    number: str
+    status: str
+    planned_start: datetime
+    dispatched_at: datetime | None
+    completed_at: datetime | None
+    vehicle_registration: str | None
+    stops: list[RoadStopOut]
+
+
+def _road_trip(principal: Principal, trip_id: uuid.UUID) -> Trip:
+    trip = Trip.objects.select_related("driver").filter(pk=trip_id).first()
+    if trip is not None:
+        if principal.has_role(*DISPATCHERS) and not principal.is_client_scoped and principal.can_see_site(trip.site_id):
+            return trip
+        if Role.DRIVER in principal.roles and trip.driver is not None and trip.driver.user_id == principal.id:
+            return trip
+    raise Problem(404, "Not found")
+
+
+def _road(trip: Trip) -> dict:
+    trip = Trip.objects.select_related("vehicle").get(pk=trip.pk)
+    stops = list(trip.stops.select_related("site").order_by("seq"))
+    attempts = {a.stop_id: a.outcome for a in DeliveryAttempt.objects.filter(trip=trip)}
+    links = (
+        StopShipment.objects.filter(trip=trip, action=StopAction.DROP)
+        .select_related("shipment")
+        .prefetch_related(Prefetch("shipment__units", queryset=ShipmentUnit.objects.order_by("sscc")))
+        .order_by("shipment__number")
+    )
+    by_stop: dict[uuid.UUID, list[dict]] = {}
+    for link in links:
+        shipment = link.shipment
+        by_stop.setdefault(link.stop_id, []).append(
+            {
+                "id": shipment.pk,
+                "number": shipment.number,
+                "order_number": shipment.order_number,
+                "client_ref": shipment.client_ref,
+                "status": shipment.status,
+                "units": list(shipment.units.all()),
+            }
+        )
+    return {
+        "id": trip.pk,
+        "number": trip.number,
+        "status": trip.status,
+        "planned_start": trip.planned_start,
+        "dispatched_at": trip.dispatched_at,
+        "completed_at": trip.completed_at,
+        "vehicle_registration": trip.vehicle.registration if trip.vehicle else None,
+        "stops": [
+            {
+                "id": stop.pk,
+                "seq": stop.seq,
+                "status": stop.status,
+                "site_code": stop.site.code,
+                "site_name": stop.site.name,
+                "address": stop.site.address,
+                "latitude": stop.site.latitude,
+                "longitude": stop.site.longitude,
+                "window_from": stop.window_from,
+                "window_to": stop.window_to,
+                "arrived_at": stop.arrived_at,
+                "outcome": attempts.get(stop.pk),
+                "shipments": by_stop.get(stop.pk, []),
+            }
+            for stop in stops
+        ],
+    }
+
+
+@router.get("/driver/trips", response=list[RoadTripOut])
+def my_trips(request):
+    """The signed-in driver's trips: being planned, on the road, or finished in the last day. The PWA keeps the
+    answer on the device so the driver can work without signal."""
+    principal = principal_of(request)
+    if Role.DRIVER not in principal.roles:
+        raise Problem(403, "Forbidden", "Drivers only.")
+    recent = timezone.now() - timedelta(days=1)
+    qs = Trip.objects.filter(driver__user_id=principal.id).filter(
+        Q(status__in=[TripStatus.PLANNING, TripStatus.DISPATCHED])
+        | Q(status=TripStatus.COMPLETED, completed_at__gte=recent)
+    )
+    return [_road(trip) for trip in qs.order_by("planned_start")[:20]]
+
+
+class ArriveIn(Schema):
+    arrived_at: datetime | None = None
+    latitude: Latitude | None = None
+    longitude: Longitude | None = None
+
+
+class UnitOutcomeIn(Schema):
+    sscc: str = Field(..., min_length=18, max_length=40)
+    status: UnitDeliveryStatus
+
+
+class PodIn(Schema):
+    recipient_name: str = Field(..., min_length=1, max_length=120)
+    signed_at: datetime | None = None
+    latitude: Latitude | None = None
+    longitude: Longitude | None = None
+    signature_document_id: uuid.UUID | None = None
+    photo_document_ids: list[uuid.UUID] = Field(default_factory=list, max_length=10)
+    units: list[UnitOutcomeIn] | None = Field(
+        None,
+        max_length=500,
+        description="Every unit scanned at the stop; units left out are missing. Omit to mark all delivered.",
+    )
+    note: str = Field("", max_length=2000)
+
+
+class FailedIn(Schema):
+    reason: FailureReason
+    note: str = Field("", max_length=2000)
+    failed_at: datetime | None = None
+    latitude: Latitude | None = None
+    longitude: Longitude | None = None
+    photo_document_ids: list[uuid.UUID] = Field(default_factory=list, max_length=10)
+
+
+class CompleteIn(Schema):
+    completed_at: datetime | None = None
+
+
+class EvidenceOut(Schema):
+    id: uuid.UUID
+    kind: str
+    sha256: str
+    size_bytes: int
+    captured_at: datetime
+
+
+@router.post("/trips/{trip_id}/stops/{stop_id}/arrive", response=RoadTripOut)
+def arrive(request, trip_id: uuid.UUID, stop_id: uuid.UUID, body: ArriveIn):
+    trip = _road_trip(principal_of(request), trip_id)
+    delivery.arrive(trip.pk, stop_id, where=delivery.Where(body.arrived_at, body.latitude, body.longitude))
+    return _road(trip)
+
+
+@router.post("/trips/{trip_id}/stops/{stop_id}/evidence", response={201: EvidenceOut})
+def upload_evidence(
+    request,
+    trip_id: uuid.UUID,
+    stop_id: uuid.UUID,
+    file: File[UploadedFile],
+    kind: Form[str],
+    captured_at: Form[datetime | None] = None,
+    latitude: Form[Latitude | None] = None,
+    longitude: Form[Longitude | None] = None,
+):
+    """Upload a signature (pod_signature) or photo (pod_photo) before sending the POD that uses it. Uploading the
+    same file again returns the same document."""
+    principal = principal_of(request)
+    trip = _road_trip(principal, trip_id)
+    doc = delivery.store_evidence(
+        trip.pk, stop_id, file, kind=kind, where=delivery.Where(captured_at, latitude, longitude), user_id=principal.id
+    )
+    return Status(201, doc)
+
+
+@router.post("/trips/{trip_id}/stops/{stop_id}/pod", response=RoadTripOut)
+def record_pod(request, trip_id: uuid.UUID, stop_id: uuid.UUID, body: PodIn):
+    principal = principal_of(request)
+    trip = _road_trip(principal, trip_id)
+    units = None if body.units is None else {u.sscc: u.status for u in body.units}
+    if units is not None and len(units) != len(body.units):
+        raise Problem(422, "Unit listed twice", "Give each unit one outcome.")
+    delivery.record_pod(
+        trip.pk,
+        stop_id,
+        recipient_name=body.recipient_name,
+        where=delivery.Where(body.signed_at, body.latitude, body.longitude),
+        signature_id=body.signature_document_id,
+        photo_ids=body.photo_document_ids,
+        units=units,
+        note=body.note,
+        user_id=principal.id,
+    )
+    return _road(trip)
+
+
+@router.post("/trips/{trip_id}/stops/{stop_id}/failed", response=RoadTripOut)
+def record_failure(request, trip_id: uuid.UUID, stop_id: uuid.UUID, body: FailedIn):
+    principal = principal_of(request)
+    trip = _road_trip(principal, trip_id)
+    delivery.record_failure(
+        trip.pk,
+        stop_id,
+        reason=body.reason,
+        note=body.note,
+        where=delivery.Where(body.failed_at, body.latitude, body.longitude),
+        photo_ids=body.photo_document_ids,
+        user_id=principal.id,
+    )
+    return _road(trip)
+
+
+@router.post("/trips/{trip_id}/complete", response=RoadTripOut)
+def complete(request, trip_id: uuid.UUID, body: CompleteIn):
+    """Back at base: every drop stop has a POD or a failure. Failed shipments are ready to plan again."""
+    principal = principal_of(request)
+    trip = _road_trip(principal, trip_id)
+    return _road(delivery.complete(trip.pk, at=body.completed_at, user_id=principal.id))
