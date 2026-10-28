@@ -10,13 +10,14 @@ from ninja import Field, File, Form, Router, Schema, Status
 from ninja.files import UploadedFile
 from ninja.utils import check_csrf
 
+from apps.integrations.telematics import adapter as telematics_adapter
 from apps.masterdata.models import Site
 from apps.platform.api import LOGIN_THROTTLE, SessionOut
 from apps.platform.apiutils import Problem, get_scoped, paginate, principal_of, require_roles, require_staff
 from apps.platform.auth import Principal, principal_for_user
 from apps.platform.models import Role
 
-from . import carrier_links, delivery, trips
+from . import carrier_links, delivery, telematics, trips
 from .models import (
     DeliveryAttempt,
     DeliveryOutcome,
@@ -183,7 +184,18 @@ class StopOut(Schema):
     window_from: datetime | None
     window_to: datetime | None
     status: str
+    arrival_source: str
+    eta: datetime | None = Field(None, description="Estimated arrival while on the road; needs a recent vehicle fix")
     shipments: list[StopShipmentOut]
+
+
+class PositionOut(Schema):
+    recorded_at: datetime
+    latitude: float
+    longitude: float
+    speed_kmh: float | None
+    heading: float | None
+    ignition: bool | None
 
 
 class TripSummary(Schema):
@@ -207,6 +219,7 @@ class TripOut(TripSummary):
     stops: list[StopOut]
     units_total: int
     units_loaded: int
+    last_position: PositionOut | None = Field(None, description="The vehicle's latest telematics fix (own fleet)")
 
 
 class TripPage(Schema):
@@ -260,6 +273,8 @@ def _unit_counts(trip: Trip) -> dict:
 def _detail(trip: Trip, principal: Principal) -> dict:
     """A trip may carry several clients' shipments; staff limited to some clients only see theirs."""
     trip = Trip.objects.select_related("vehicle", "driver", "carrier").get(pk=trip.pk)
+    fix = telematics.last_position(trip.vehicle_id) if trip.status == TripStatus.DISPATCHED else None
+    etas = telematics.etas(trip, fix=fix) if fix else {}
     links = StopShipment.objects.filter(trip=trip).select_related("shipment").order_by("shipment__number")
     by_stop: dict[uuid.UUID, list[dict]] = {}
     for link in links:
@@ -277,11 +292,13 @@ def _detail(trip: Trip, principal: Principal) -> dict:
             "window_from": stop.window_from,
             "window_to": stop.window_to,
             "status": stop.status,
+            "arrival_source": stop.arrival_source,
+            "eta": etas.get(stop.pk),
             "shipments": by_stop.get(stop.pk, []),
         }
         for stop in trip.stops.select_related("site").order_by("seq")
     ]
-    return {**_summary(trip), "stops": stops, **_unit_counts(trip)}
+    return {**_summary(trip), "stops": stops, **_unit_counts(trip), "last_position": fix}
 
 
 def _writable_trip(request, roles: tuple[str, ...] = DISPATCHERS) -> Principal:
@@ -765,7 +782,7 @@ class TrackingOut(Schema):
     trip_number: str | None
     vehicle_registration: str | None
     stops_before: int | None = Field(None, description="Drop stops still to do before this one, while on the road")
-    eta: datetime | None = Field(None, description="Estimated arrival; needs telematics")
+    eta: datetime | None = Field(None, description="Estimated arrival while on the road; needs a recent vehicle fix")
     events: list[TrackingEvent]
     pod: PodOut | None
 
@@ -842,6 +859,7 @@ def track_shipment(request, shipment_id: uuid.UUID):
         "trip_number": current.trip.number if current else None,
         "vehicle_registration": current.trip.vehicle.registration if current and current.trip.vehicle else None,
         "stops_before": stops_before,
+        "eta": telematics.eta_for(current.trip, current.stop) if stops_before is not None else None,
         "events": sorted(events, key=lambda e: e.at),
         "pod": _pod(shipment, attempts[-1]) if attempts else None,
     }
@@ -855,3 +873,31 @@ def shipment_pod(request, shipment_id: uuid.UUID):
     if not attempts:
         raise Problem(404, "No delivery yet", f"{shipment.number} hasn't reached its delivery stop.")
     return _pod(shipment, attempts[-1])
+
+
+# --- Telematics --------------------------------------------------------------------------------------------------
+
+
+class TelematicsAccepted(Schema):
+    received: int
+    accepted: int
+    rejected: int
+    unknown: int
+    arrivals: int
+
+
+@router.post("/integrations/telematics/webhook", auth=None, response={202: TelematicsAccepted})
+def telematics_webhook(request):
+    """Positions pushed by the telematics vendor, authenticated by the adapter's signature check (for the fake
+    adapter, an HMAC-SHA256 of the body keyed with TELEMATICS_WEBHOOK_SECRET). Re-sent positions are ignored."""
+    port = telematics_adapter()
+    if port is None:
+        raise Problem(404, "Not found")
+    body = request.body
+    if not port.verify_webhook(request.headers, body):
+        raise Problem(401, "Invalid signature")
+    try:
+        positions = port.parse_webhook(body)
+    except (ValueError, KeyError, TypeError) as error:
+        raise Problem(400, "Unreadable positions", str(error)[:200]) from error
+    return Status(202, telematics.ingest(positions).as_dict())
