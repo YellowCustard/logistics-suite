@@ -6,6 +6,9 @@ import { AuthProvider, useAuth } from "./auth";
 import { Layout } from "./components/Layout";
 import { Loading } from "./components/ui";
 import { Home } from "./pages/Home";
+import { Inbound } from "./pages/Inbound";
+import { InboundDetail } from "./pages/InboundDetail";
+import { NewInbound } from "./pages/NewInbound";
 import { NewOrder } from "./pages/NewOrder";
 import { OrderDetail } from "./pages/OrderDetail";
 import { Orders } from "./pages/Orders";
@@ -13,6 +16,7 @@ import { Shipments } from "./pages/Shipments";
 import { SignIn } from "./pages/SignIn";
 import { Stock } from "./pages/Stock";
 import { Tracking } from "./pages/Tracking";
+import { UploadInbound } from "./pages/UploadInbound";
 import { UploadOrders } from "./pages/UploadOrders";
 
 export const queryClient = new QueryClient({
@@ -35,6 +39,10 @@ export const routes = [
       { path: "orders/new", element: <NewOrder /> },
       { path: "orders/upload", element: <UploadOrders /> },
       { path: "orders/:id", element: <OrderDetail /> },
+      { path: "inbound", element: <Inbound /> },
+      { path: "inbound/new", element: <NewInbound /> },
+      { path: "inbound/upload", element: <UploadInbound /> },
+      { path: "inbound/:id", element: <InboundDetail /> },
       { path: "stock", element: <Stock /> },
       { path: "shipments", element: <Shipments /> },
       { path: "shipments/:id", element: <Tracking /> },

@@ -129,7 +129,9 @@ td a { font-weight: 600; text-decoration: none; }
 
 .tag { display: inline-block; padding: 2px 8px; border-radius: 10px; font-family: var(--nq-font-label, inherit); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; background: var(--nq-mist, #e6e9f2); }
 .tag.delivered { background: #d5f5e3; color: var(--ok); }
-.tag.in_transit, .tag.planned, .tag.ready, .tag.dispatched, .tag.allocated, .tag.picking, .tag.packed { background: #dfe6fb; color: var(--brand); }
+.tag.in_transit, .tag.planned, .tag.ready, .tag.dispatched, .tag.allocated, .tag.picking, .tag.packed,
+.tag.receiving { background: #dfe6fb; color: var(--brand); }
+.tag.closed, .tag.good { background: #d5f5e3; color: var(--ok); }
 .tag.failed, .tag.cancelled, .tag.refused, .tag.missing, .tag.damaged, .tag.backordered, .tag.quarantine,
 .tag.high, .tag.critical { background: #fadbd8; color: var(--bad); }
 .tag.medium { background: #fdebd0; color: #8a5300; }

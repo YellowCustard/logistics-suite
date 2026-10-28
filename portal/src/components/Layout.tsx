@@ -6,6 +6,7 @@ import { useAuth } from "../auth";
 const SECTIONS = [
   { to: "/", label: "Home", end: true },
   { to: "/orders", label: "Orders" },
+  { to: "/inbound", label: "Inbound" },
   { to: "/stock", label: "Stock" },
   { to: "/shipments", label: "Tracking" },
 ];

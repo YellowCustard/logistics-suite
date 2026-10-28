@@ -17,7 +17,7 @@ from apps.oms import services as oms
 from apps.platform import csvimport
 from apps.platform.apiutils import Problem, get_scoped, paginate, principal_of, require_roles, require_staff
 from apps.platform.auth import Principal
-from apps.platform.models import Role
+from apps.platform.models import Document, Role
 
 from . import adjustments, allocation, counting, labels, packing, picking, putaway, receiving
 from .models import (
@@ -139,10 +139,16 @@ class ReceiptLineIn(Schema):
     command_id: uuid.UUID | None = Field(None, description="Device-generated id; a replay returns the same line")
 
 
+class PhotoRef(Schema):
+    id: uuid.UUID
+    mime: str
+
+
 class ReceiptLineOut(Schema):
     id: uuid.UUID
     inbound_notice_line_id: uuid.UUID | None
     item_id: uuid.UUID
+    sku: str
     qty: Decimal
     uom: str
     base_qty: Decimal
@@ -150,6 +156,26 @@ class ReceiptLineOut(Schema):
     expiry: date | None
     condition: str
     lpn: str
+    photos: list[PhotoRef] = Field(default_factory=list, description="Download from /documents/{id}/download")
+
+    @staticmethod
+    def resolve_sku(obj) -> str:
+        return obj.item.sku
+
+    @staticmethod
+    def resolve_photos(obj) -> list:
+        photos = getattr(obj, "photo_refs", None)  # set in bulk by ReceiptOut; one query per line otherwise
+        if photos is None:
+            photos = list(_photos_by_line([obj.pk]).get(str(obj.pk), []))
+        return photos
+
+
+def _photos_by_line(line_ids) -> dict[str, list]:
+    by_line: dict[str, list] = {}
+    docs = Document.objects.filter(linked_type="wms.receiptline", linked_id__in=[str(i) for i in line_ids])
+    for doc in docs.order_by("created_at", "id").only("id", "mime", "linked_id"):
+        by_line.setdefault(doc.linked_id, []).append(doc)
+    return by_line
 
 
 class ReceiptOut(Schema):
@@ -165,7 +191,11 @@ class ReceiptOut(Schema):
 
     @staticmethod
     def resolve_lines(obj: Receipt):
-        return list(obj.lines.order_by("created_at", "id"))
+        lines = list(obj.lines.select_related("item").order_by("created_at", "id"))
+        photos = _photos_by_line([line.pk for line in lines])
+        for line in lines:
+            line.photo_refs = photos.get(str(line.pk), [])
+        return lines
 
 
 def _receipt_for_operator(principal: Principal, receipt_id: uuid.UUID) -> Receipt:
@@ -192,18 +222,34 @@ class ReceiptPage(Schema):
     next_cursor: uuid.UUID | None
 
 
+def _readable_receipts(principal: Principal) -> QuerySet:
+    """Staff read receipts at their sites; a client reads its own at every site."""
+    if principal.is_client_scoped:
+        return principal.scope(Receipt.objects.all())
+    return _staff_scoped(principal, Receipt.objects.all())
+
+
 @router.get("/receipts", response=ReceiptPage)
-def list_receipts(request, status: ReceiptStatus | None = None, cursor: uuid.UUID | None = None, limit: int = 50):
-    qs = _staff_scoped(principal_of(request), Receipt.objects.all())
+def list_receipts(
+    request,
+    status: ReceiptStatus | None = None,
+    inbound_notice_id: uuid.UUID | None = None,
+    cursor: uuid.UUID | None = None,
+    limit: int = 50,
+):
+    """Receipts with their lines: what arrived, its condition, and photos of damaged stock."""
+    qs = _readable_receipts(principal_of(request))
     if status:
         qs = qs.filter(status=status)
+    if inbound_notice_id:
+        qs = qs.filter(inbound_notice_id=inbound_notice_id)
     items, next_cursor = paginate(qs, cursor, limit)
     return {"items": items, "next_cursor": next_cursor}
 
 
 @router.get("/receipts/{receipt_id}", response=ReceiptOut)
 def get_receipt(request, receipt_id: uuid.UUID):
-    return get_scoped(_staff_scoped(principal_of(request), Receipt.objects.all()), receipt_id)
+    return get_scoped(_readable_receipts(principal_of(request)), receipt_id)
 
 
 @router.post("/receipts/{receipt_id}/lines", response={201: ReceiptLineOut})

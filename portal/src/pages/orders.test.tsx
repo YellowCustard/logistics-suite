@@ -124,7 +124,7 @@ it("lists every rejected row of a CSV upload, then imports a fixed file", async 
           }
         : { status: 201, json: { created: 1, document_id: "d1", orders: [{ id: "o1", number: "SO-1", client_ref: "PO-1" }] } },
   });
-  renderAt("/orders/upload", <UploadOrders />, "/orders/upload");
+  renderAt("/orders/upload", <UploadOrders />, "/orders/upload", ["/orders/:id"]);
 
   const file = new File(["client_ref,site_code\n"], "orders.csv", { type: "text/csv" });
   await userEvent.upload(screen.getByLabelText("CSV file (UTF-8)"), file);
@@ -132,7 +132,7 @@ it("lists every rejected row of a CSV upload, then imports a fixed file", async 
 
   const table = await screen.findByRole("table");
   const rows = within(table).getAllByRole("row").slice(1).map((r) => r.textContent);
-  expect(rows).toEqual(["3qtyInput should be greater than 0", "5whole orderUnknown SKU NOPE"]);
+  expect(rows).toEqual(["3qtyInput should be greater than 0", "5whole recordUnknown SKU NOPE"]);
   expect(screen.getByText("2 error(s); nothing was imported.")).toBeInTheDocument();
   const sent = calls.find((c) => c.method === "POST")!.body as FormData;
   expect((sent.get("file") as File).name).toBe("orders.csv");
