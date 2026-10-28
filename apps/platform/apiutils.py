@@ -53,13 +53,13 @@ def get_scoped(qs: QuerySet, pk: uuid.UUID) -> Model:
 
 
 def paginate(
-    qs: QuerySet, cursor: uuid.UUID | None, limit: int, max_limit: int = 200
+    qs: QuerySet, cursor: uuid.UUID | None, limit: int, max_limit: int = 200, *, newest_first: bool = False
 ) -> tuple[list[Model], uuid.UUID | None]:
     """Keyset pagination on the UUIDv7 primary key (time-ordered, stable under inserts)."""
     limit = max(1, min(limit, max_limit))
     if cursor is not None:
-        qs = qs.filter(pk__gt=cursor)
-    rows = list(qs.order_by("pk")[: limit + 1])
+        qs = qs.filter(pk__lt=cursor) if newest_first else qs.filter(pk__gt=cursor)
+    rows = list(qs.order_by("-pk" if newest_first else "pk")[: limit + 1])
     next_cursor = rows[limit - 1].pk if len(rows) > limit else None
     return rows[:limit], next_cursor
 

@@ -10,4 +10,5 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/v1/", api.urls),
     path("scanner/", include("apps.scanner.urls")),
+    path("portal/", include("apps.portal.urls")),
 ]

@@ -117,6 +117,7 @@ def list_shipments(
     site_id: uuid.UUID | None = None,
     status: ShipmentStatus | None = None,
     sales_order_id: uuid.UUID | None = None,
+    newest_first: bool = False,
     cursor: uuid.UUID | None = None,
     limit: int = 50,
 ):
@@ -127,7 +128,7 @@ def list_shipments(
         qs = qs.filter(status=status)
     if sales_order_id:
         qs = qs.filter(sales_order_id=sales_order_id)
-    items, next_cursor = paginate(qs, cursor, limit)
+    items, next_cursor = paginate(qs, cursor, limit, newest_first=newest_first)
     return {"items": items, "next_cursor": next_cursor}
 
 

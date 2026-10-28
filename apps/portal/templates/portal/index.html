@@ -1,0 +1,19 @@
+{% load static %}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b1020">
+  <title>Nuronteq Portal</title>
+  <link rel="icon" href="{% static 'brand/favicon.svg' %}" type="image/svg+xml">
+  <link rel="stylesheet" href="{% static 'brand/tokens.css' %}">
+  {% for css in entry.css %}<link rel="stylesheet" href="{% static css %}">
+  {% endfor %}
+</head>
+<body>
+  <div id="root" data-csrf-cookie="{{ csrf_cookie_name }}">
+    {% if not entry %}<p>The portal hasn't been built. Run <code>npm ci &amp;&amp; npm run build</code> in <code>portal/</code>.</p>{% endif %}
+  </div>
+  {% if entry %}<script type="module" src="{% static entry.js %}"></script>{% endif %}
+</body>
+</html>
