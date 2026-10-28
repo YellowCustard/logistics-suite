@@ -1177,7 +1177,24 @@
   // the server has them, the cached trip shows their effect so the driver can carry on without signal.
 
   function isDriver() {
-    return Boolean(state.session && state.session.roles.includes("driver"));
+    return Boolean(state.session && state.session.roles.some((r) => r === "driver" || r === "carrier_driver"));
+  }
+
+  // A subcontractor's driver opens a link the dispatcher sent them; it signs them in for that one trip.
+  async function redeemLink(token) {
+    history.replaceState(null, "", `${location.pathname}#`); // keep the token out of history and screenshots
+    if (!state.online) {
+      say("Open the link again when you have signal.", "bad");
+      return route();
+    }
+    try {
+      const res = await api("POST", "/carrier-links/redeem", { token });
+      if (res.status !== 200) throw problem(res, "This link doesn't work. Ask the dispatcher for a new one.");
+      await startSession(res.data);
+    } catch (error) {
+      say(error.offline ? "Open the link again when you have signal." : error.message, "bad");
+    }
+    route();
   }
 
   function driverMode() {
@@ -1645,6 +1662,7 @@
 
   function route() {
     renderStatus();
+    if (location.hash.startsWith("#link/")) return void redeemLink(location.hash.slice("#link/".length));
     if (!state.session) return viewLogin();
     if (driverMode()) return routeDriver();
     if (!state.siteId || location.hash === "#site") return viewSites();
