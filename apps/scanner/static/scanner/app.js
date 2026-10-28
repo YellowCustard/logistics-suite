@@ -1,9 +1,11 @@
-// Scanner PWA: offline-first warehouse actions over /api/v1/sync.
+// Scanner PWA: offline-first warehouse and driver actions over /api/v1/sync.
 //
 // Every write is a command with a device-generated id, queued in IndexedDB and pushed in order whenever the
 // device is online. The server applies each command once (a retry gets the stored outcome), so a lost
 // response or a flaky connection never double-books stock. Reference data (bins, items, ASNs, tasks,
-// counts) is pulled per site and kept locally so the floor keeps working without Wi-Fi.
+// counts) is pulled per site and kept locally so the floor keeps working without Wi-Fi. Drivers get their own
+// menu: their trips are cached on the device, and signatures and photos wait in IndexedDB until there is signal,
+// then upload before the proof of delivery that names them.
 "use strict";
 
 (() => {
@@ -14,6 +16,17 @@
   const PUSH_BATCH = 50;
   const HISTORY_SIZE = 100;
   const CLOSED = new Set(["closed", "cancelled", "done", "short", "posted", "rejected", "awaiting_approval"]);
+  const WAREHOUSE_ROLES = new Set(["system_admin", "site_manager", "warehouse_supervisor", "warehouse_operator", "dispatcher"]);
+  const PHOTO_MAX_PX = 1600;
+  const FAILURE_REASONS = [
+    ["closed", "Premises closed"],
+    ["refused", "Refused by the recipient"],
+    ["no_access", "No access"],
+    ["wrong_address", "Wrong or unknown address"],
+    ["damaged", "Goods damaged"],
+    ["out_of_time", "Ran out of time"],
+    ["other", "Other (say what)"],
+  ];
 
   const app = document.getElementById("app");
   const statusEl = document.getElementById("status");
@@ -80,10 +93,12 @@
     handle: null,
     open() {
       return new Promise((resolve, reject) => {
-        const req = indexedDB.open("scanner", 1);
+        const req = indexedDB.open("scanner", 2);
         req.onupgradeneeded = () => {
-          req.result.createObjectStore("kv");
-          req.result.createObjectStore("queue", { keyPath: "seq", autoIncrement: true });
+          const stores = req.result.objectStoreNames;
+          if (!stores.contains("kv")) req.result.createObjectStore("kv");
+          if (!stores.contains("queue")) req.result.createObjectStore("queue", { keyPath: "seq", autoIncrement: true });
+          if (!stores.contains("files")) req.result.createObjectStore("files"); // evidence waiting to upload
         };
         req.onsuccess = () => resolve((this.handle = req.result));
         req.onerror = () => reject(req.error);
@@ -103,6 +118,9 @@
     queue: () => db.run("queue", "readonly", (s) => s.getAll()),
     putCommand: (cmd) => db.run("queue", "readwrite", (s) => s.put(cmd)),
     dropCommand: (seq) => db.run("queue", "readwrite", (s) => s.delete(seq)),
+    putFile: (id, record) => db.run("files", "readwrite", (s) => s.put(record, id)),
+    getFile: (id) => db.run("files", "readonly", (s) => s.get(id)),
+    dropFile: (id) => db.run("files", "readwrite", (s) => s.delete(id)),
   };
 
   // --- State --------------------------------------------------------------------------------------------------
@@ -121,6 +139,7 @@
     syncing: false,
     lastSync: null,
     flash: null,
+    trips: [],
   };
 
   function emptyRef() {
@@ -191,6 +210,24 @@
     renderStatus();
   }
 
+  async function upload(path, form) {
+    let response;
+    try {
+      response = await fetch(API + path, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { Accept: "application/json", "X-CSRFToken": csrfToken(), "Idempotency-Key": uuid4() },
+        body: form,
+      });
+    } catch {
+      setOnline(false);
+      throw Object.assign(new Error("offline"), { offline: true });
+    }
+    setOnline(true);
+    const text = await response.text();
+    return { status: response.status, data: text ? JSON.parse(text) : null };
+  }
+
   // --- Queue and sync -----------------------------------------------------------------------------------------
 
   async function refreshQueue() {
@@ -205,12 +242,15 @@
     return state.queue.filter((c) => c.state === "pending" && mine(c));
   }
 
-  async function enqueue(type, payload, summary) {
+  // `files` are evidence saved with saveFile(): uploaded just before the command is sent, and their document ids
+  // put into the payload (`signature` -> signature_document_id, `photo` -> photo_document_ids).
+  async function enqueue(type, payload, summary, files = []) {
     await db.putCommand({
       command_id: uuid4(),
       type,
       payload,
       summary,
+      files,
       user_id: state.session.user_id,
       site_id: state.siteId,
       recorded_at: new Date().toISOString(),
@@ -227,11 +267,67 @@
     await db.set(`history:${state.session.user_id}`, state.history);
   }
 
+  async function saveFile(blob, name, extra) {
+    const id = uuid4();
+    await db.putFile(id, { blob, name, captured_at: new Date().toISOString(), ...extra });
+    return id;
+  }
+
+  async function dropFiles(cmd) {
+    for (const ref of cmd.files || []) await db.dropFile(ref.file_id);
+  }
+
+  async function reject(cmd, problem) {
+    cmd.state = "rejected";
+    cmd.problem = problem;
+    await db.putCommand(cmd);
+    await remember(cmd, "rejected");
+  }
+
+  // Upload a command's evidence. Returns false if the server refused a file (the command is then rejected).
+  async function uploadFiles(cmd) {
+    const refs = cmd.files || [];
+    for (const ref of refs) {
+      if (ref.document_id) continue;
+      const record = await db.getFile(ref.file_id);
+      if (!record) {
+        await reject(cmd, { title: "Evidence lost", detail: "A signature or photo is missing on this device. Capture it again." });
+        return false;
+      }
+      const form = new FormData();
+      form.append("file", record.blob, record.name);
+      form.append("kind", ref.kind);
+      form.append("captured_at", record.captured_at);
+      if (record.latitude) form.append("latitude", record.latitude);
+      if (record.longitude) form.append("longitude", record.longitude);
+      const res = await upload(`/trips/${cmd.payload.trip_id}/stops/${cmd.payload.stop_id}/evidence`, form);
+      if (res.status === 401 || res.status >= 500) throw Object.assign(new Error("upload failed"), { status: res.status });
+      if (res.status !== 201) {
+        await reject(cmd, res.data || { title: "Upload refused" });
+        return false;
+      }
+      ref.document_id = res.data.id;
+      await db.putCommand(cmd);
+    }
+    if (refs.length) {
+      const signature = refs.find((r) => r.field === "signature");
+      if (signature) cmd.payload.signature_document_id = signature.document_id;
+      cmd.payload.photo_document_ids = refs.filter((r) => r.field === "photo").map((r) => r.document_id);
+      await db.putCommand(cmd);
+    }
+    return true;
+  }
+
   async function pushQueue() {
     for (;;) {
       await refreshQueue();
-      const batch = pending().slice(0, PUSH_BATCH);
+      let batch = pending().slice(0, PUSH_BATCH);
       if (!batch.length) return;
+      // Evidence goes first, in queue order, so a POD never reaches the server before its signature.
+      const ready = [];
+      for (const cmd of batch) if (await uploadFiles(cmd)) ready.push(cmd);
+      batch = ready;
+      if (!batch.length) continue;
       const res = await api("POST", "/sync/push", {
         device_id: state.deviceId,
         commands: batch.map((c) => ({ command_id: c.command_id, type: c.type, payload: c.payload, recorded_at: c.recorded_at })),
@@ -241,12 +337,10 @@
         const cmd = batch.find((c) => c.command_id === result.command_id);
         if (result.status === "applied") {
           await db.dropCommand(cmd.seq);
+          await dropFiles(cmd);
           await remember(cmd, "applied");
         } else if (result.status === "rejected") {
-          cmd.state = "rejected";
-          cmd.problem = result.problem;
-          await db.putCommand(cmd);
-          await remember(cmd, "rejected");
+          await reject(cmd, result.problem);
         }
       }
       if (res.data.results.some((r) => r.status === "retry") || res.data.results.length < batch.length) return;
@@ -286,7 +380,10 @@
     renderStatus();
     try {
       await pushQueue();
-      if (state.siteId) {
+      if (driverMode()) {
+        await pullTrips();
+        if (!formOnScreen()) route();
+      } else if (state.siteId) {
         await pull();
         if (!formOnScreen()) route(); // refresh lists and counters, but never wipe a half-scanned form
       }
@@ -474,6 +571,7 @@
         h("a", { class: "tile", href: "#putaway" }, `Put away (${openTasks().length})`),
         h("a", { class: "tile", href: "#pick" }, `Pick (${openPicks().length})`),
         h("a", { class: "tile", href: "#pack" }, "Pack"),
+        h("a", { class: "tile", href: "#load" }, "Load"),
         h("a", { class: "tile", href: "#count" }, `Count (${state.ref.counts.size})`),
         h("a", { class: "tile", href: "#move" }, "Move"),
       ),
@@ -976,7 +1074,7 @@
                   {},
                   h("strong", {}, c.summary),
                   h("div", {}, `${(c.problem && c.problem.title) || "Rejected"}${c.problem && c.problem.detail ? `: ${c.problem.detail}` : ""}`),
-                  h("button", { class: "secondary", onclick: guarded(async () => { await db.dropCommand(c.seq); await refreshQueue(); renderStatus(); route(); }) }, "Dismiss"),
+                  h("button", { class: "secondary", onclick: guarded(async () => { await db.dropCommand(c.seq); await dropFiles(c); await refreshQueue(); renderStatus(); route(); }) }, "Dismiss"),
                 ),
               ),
             ),
@@ -990,12 +1088,514 @@
     );
   }
 
+  // --- Loading ------------------------------------------------------------------------------------------------
+  // Loading checks each SSCC against the trip on the server (which trip it belongs to, what's already loaded),
+  // so like packing it works online only.
+
+  function loadOffline() {
+    show(h("h1", {}, "Load"), h("p", { class: "flash bad" }, "Loading needs a connection."), h("div", { class: "actions" }, back()));
+  }
+
+  async function viewLoadList() {
+    if (!state.online) return loadOffline();
+    let trips = [];
+    try {
+      const res = await api("GET", `/trips?site_id=${state.siteId}&status=planning&limit=100`);
+      if (res.status !== 200) throw problem(res, "Could not load trips.");
+      trips = res.data.items;
+    } catch (error) {
+      if (error.offline) return loadOffline();
+      say(error.message, "bad");
+    }
+    show(
+      h("h1", {}, "Load"),
+      flash(),
+      h(
+        "ul",
+        { class: "list" },
+        trips.map((t) =>
+          h(
+            "li",
+            {},
+            h(
+              "a",
+              { href: `#load/${t.id}` },
+              h("strong", {}, t.number),
+              h("div", { class: "muted" }, `${t.vehicle_registration || t.carrier_code || "No vehicle yet"} · ${new Date(t.planned_start).toLocaleString()}`),
+            ),
+          ),
+        ),
+      ),
+      trips.length ? null : h("p", { class: "muted" }, "No trips are being loaded at this site."),
+      h("div", { class: "actions" }, back()),
+    );
+  }
+
+  async function viewLoad(tripId) {
+    if (!state.online) return loadOffline();
+    let trip;
+    try {
+      const res = await api("GET", `/trips/${tripId}`);
+      if (res.status !== 200) throw problem(res, "Could not load the trip.");
+      trip = res.data;
+    } catch (error) {
+      if (error.offline) return loadOffline();
+      say(error.message, "bad");
+      location.hash = "#load";
+      return;
+    }
+    const code = h("input", { autocomplete: "off", inputmode: "numeric", placeholder: "Scan pallet or carton label", autofocus: true });
+    const form = h(
+      "form",
+      {
+        onsubmit: guarded(async () => {
+          const res = await api("POST", `/trips/${tripId}/load`, { sscc: code.value.trim() });
+          if (res.status !== 200) throw problem(res, "Could not load that unit.");
+          say(`Loaded ${res.data.sscc} · ${res.data.units_loaded} of ${res.data.units_total}`);
+          if (res.data.warning) say(`${res.data.units_loaded} of ${res.data.units_total} loaded. ${res.data.warning}`, "bad");
+          route();
+        }),
+      },
+      field("SSCC", code),
+      h("div", { class: "actions" }, h("button", { type: "submit" }, "Load")),
+    );
+    const drops = trip.stops.filter((s) => s.seq > 1);
+    show(
+      h("h1", {}, `Load ${trip.number}`),
+      flash(),
+      h("p", {}, h("strong", {}, `${trip.units_loaded} of ${trip.units_total} units loaded`)),
+      h("p", { class: "muted" }, trip.vehicle_registration || trip.carrier_code || "No vehicle assigned yet"),
+      form,
+      h("h2", {}, "Stops"),
+      h("ul", { class: "list" }, drops.map((s) => h("li", {}, `${s.seq - 1}. ${s.site_name}`, h("div", { class: "muted" }, s.shipments.map((x) => x.number).join(", "))))),
+      h("div", { class: "actions" }, back("#load")),
+    );
+  }
+
+  // --- Driver -------------------------------------------------------------------------------------------------
+  // The driver's trips come from GET /driver/trips and are kept on the device. Actions are queued commands; until
+  // the server has them, the cached trip shows their effect so the driver can carry on without signal.
+
+  function isDriver() {
+    return Boolean(state.session && state.session.roles.includes("driver"));
+  }
+
+  function driverMode() {
+    return isDriver() && !state.session.roles.some((r) => WAREHOUSE_ROLES.has(r));
+  }
+
+  async function pullTrips() {
+    const res = await api("GET", "/driver/trips");
+    if (res.status !== 200) throw Object.assign(new Error("trips failed"), { status: res.status });
+    state.trips = res.data;
+    await db.set(`trips:${state.session.user_id}`, state.trips);
+    overlayPending();
+  }
+
+  function overlayPending() {
+    for (const cmd of pending().filter((c) => c.type.startsWith("trip."))) {
+      const trip = state.trips.find((t) => t.id === cmd.payload.trip_id);
+      if (!trip) continue;
+      if (cmd.type === "trip.complete") {
+        trip.status = "completed";
+        continue;
+      }
+      const stop = trip.stops.find((s) => s.id === cmd.payload.stop_id);
+      if (!stop) continue;
+      if (cmd.type === "trip.arrive" && stop.status === "pending") stop.status = "arrived";
+      if (cmd.type === "trip.pod") Object.assign(stop, { status: "done", outcome: "delivered" });
+      if (cmd.type === "trip.failed") Object.assign(stop, { status: "done", outcome: "failed" });
+    }
+  }
+
+  function findTrip(tripId) {
+    return state.trips.find((t) => t.id === tripId);
+  }
+
+  function here() {
+    return new Promise((resolve) => {
+      if (!navigator.geolocation) return resolve({});
+      navigator.geolocation.getCurrentPosition(
+        (p) => resolve({ latitude: p.coords.latitude.toFixed(6), longitude: p.coords.longitude.toFixed(6) }),
+        () => resolve({}),
+        { enableHighAccuracy: true, timeout: 5000, maximumAge: 60000 },
+      );
+    });
+  }
+
+  // Phone photos are several MB; a 1600 px JPEG is plenty for a POD and uploads quickly on a weak signal.
+  async function shrink(file) {
+    try {
+      const bitmap = await createImageBitmap(file);
+      const scale = Math.min(1, PHOTO_MAX_PX / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(bitmap.width * scale);
+      canvas.height = Math.round(bitmap.height * scale);
+      canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      return (await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.8))) || file;
+    } catch {
+      return file;
+    }
+  }
+
+  function photoPicker() {
+    const photos = [];
+    const count = h("p", { class: "muted" }, "No photos yet.");
+    const input = h("input", { type: "file", accept: "image/*", capture: "environment", multiple: true });
+    input.addEventListener("change", async () => {
+      for (const file of input.files) photos.push(await shrink(file));
+      input.value = "";
+      count.textContent = `${photos.length} photo${photos.length === 1 ? "" : "s"} taken.`;
+    });
+    return { photos, nodes: [...field("Photos", input), count] };
+  }
+
+  function signaturePad() {
+    const canvas = h("canvas", { class: "signature", width: 600, height: 220 });
+    const ctx = canvas.getContext("2d");
+    let drawing = false;
+    let signed = false;
+    const point = (event) => {
+      const box = canvas.getBoundingClientRect();
+      return [((event.clientX - box.left) * canvas.width) / box.width, ((event.clientY - box.top) * canvas.height) / box.height];
+    };
+    const clear = () => {
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.lineWidth = 3;
+      ctx.lineCap = "round";
+      ctx.strokeStyle = "#0b1020";
+      signed = false;
+    };
+    canvas.addEventListener("pointerdown", (event) => {
+      drawing = true;
+      canvas.setPointerCapture(event.pointerId);
+      ctx.beginPath();
+      ctx.moveTo(...point(event));
+    });
+    canvas.addEventListener("pointermove", (event) => {
+      if (!drawing) return;
+      ctx.lineTo(...point(event));
+      ctx.stroke();
+      signed = true;
+    });
+    canvas.addEventListener("pointerup", () => (drawing = false));
+    clear();
+    return {
+      nodes: [h("label", {}, "Signature"), canvas, h("button", { type: "button", class: "secondary", onclick: clear }, "Clear signature")],
+      signed: () => signed,
+      blob: () => new Promise((resolve) => canvas.toBlob(resolve, "image/png")),
+    };
+  }
+
+  function normaliseSscc(raw) {
+    const digits = raw.replace(/\D/g, "");
+    return digits.length === 20 && digits.startsWith("00") ? digits.slice(2) : digits;
+  }
+
+  function stopTitle(stop) {
+    return `${stop.seq - 1}. ${stop.site_name}`;
+  }
+
+  function stopTag(stop) {
+    const text = stop.outcome || stop.status;
+    return h("span", { class: `tag ${stop.outcome === "failed" ? "rejected" : stop.status === "done" ? "applied" : ""}` }, text);
+  }
+
+  function viewTrips() {
+    const trips = state.trips;
+    const rejected = state.queue.filter((c) => c.state === "rejected" && mine(c)).length;
+    show(
+      h("h1", {}, "My trips"),
+      flash(),
+      h(
+        "ul",
+        { class: "list" },
+        trips.map((t) => {
+          const drops = t.stops.filter((s) => s.seq > 1);
+          const done = drops.filter((s) => s.status === "done").length;
+          return h(
+            "li",
+            {},
+            h(
+              "a",
+              { href: `#trip/${t.id}` },
+              h("strong", {}, t.number),
+              " ",
+              h("span", { class: "tag" }, t.status),
+              h("div", { class: "muted" }, `${t.vehicle_registration || ""} · ${done} of ${drops.length} stops done · ${new Date(t.planned_start).toLocaleString()}`),
+            ),
+          );
+        }),
+      ),
+      trips.length ? null : h("p", { class: "muted" }, state.online ? "No trips assigned to you." : "No trips saved on this device yet. Connect to load them."),
+      h(
+        "div",
+        { class: "actions" },
+        h("a", { class: "btn secondary", href: "#queue" }, rejected ? `Activity · ${rejected} problem${rejected > 1 ? "s" : ""}` : "Activity"),
+        h("button", { class: "secondary", onclick: () => syncNow() }, "Sync now"),
+        h("button", { class: "secondary", onclick: guarded(signOut) }, `Sign out ${state.session.email}`),
+      ),
+    );
+  }
+
+  function viewTrip(tripId) {
+    const trip = findTrip(tripId);
+    if (!trip) return viewTrips();
+    const drops = trip.stops.filter((s) => s.seq > 1);
+    const allDone = drops.every((s) => s.status === "done");
+    const onRoad = trip.status === "dispatched";
+    show(
+      h("h1", {}, trip.number),
+      flash(),
+      h("p", { class: "muted" }, `${trip.vehicle_registration || ""} · ${trip.status}`),
+      trip.status === "planning" ? h("p", { class: "flash bad" }, "This trip hasn't been dispatched yet.") : null,
+      h(
+        "ul",
+        { class: "list" },
+        drops.map((s) =>
+          h(
+            "li",
+            {},
+            h(
+              "a",
+              { href: `#stop/${trip.id}/${s.id}` },
+              h("strong", {}, stopTitle(s)),
+              " ",
+              stopTag(s),
+              h("div", { class: "muted" }, s.address || s.site_code),
+              s.window_from ? h("div", { class: "muted" }, `Window ${new Date(s.window_from).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}–${s.window_to ? new Date(s.window_to).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}`) : null,
+            ),
+          ),
+        ),
+      ),
+      h(
+        "div",
+        { class: "actions" },
+        onRoad && allDone
+          ? h(
+              "button",
+              {
+                onclick: guarded(async () => {
+                  if (!confirm(`Finish ${trip.number}? Bring back anything that wasn't delivered.`)) return;
+                  await enqueue("trip.complete", { trip_id: trip.id, completed_at: new Date().toISOString() }, `${trip.number}: complete`);
+                  overlayPending();
+                  say(`${trip.number} finished`);
+                  location.hash = "#";
+                }),
+              },
+              "Finish trip",
+            )
+          : null,
+        back("#"),
+      ),
+    );
+  }
+
+  function mapsLink(stop) {
+    const where = stop.latitude && stop.longitude ? `${stop.latitude},${stop.longitude}` : `${stop.site_name}, ${stop.address}`;
+    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(where)}`;
+  }
+
+  function viewStop(tripId, stopId) {
+    const trip = findTrip(tripId);
+    const stop = trip && trip.stops.find((s) => s.id === stopId);
+    if (!stop) return viewTrips();
+    const open = trip.status === "dispatched" && stop.status !== "done";
+    show(
+      h("h1", {}, stopTitle(stop)),
+      flash(),
+      h("p", {}, stop.address || stop.site_code, " ", stopTag(stop)),
+      h("p", {}, h("a", { href: mapsLink(stop), target: "_blank", rel: "noopener" }, "Open in maps")),
+      h("h2", {}, "To drop"),
+      h(
+        "ul",
+        { class: "list" },
+        stop.shipments.map((x) =>
+          h("li", {}, h("strong", {}, x.number), x.client_ref ? ` · ${x.client_ref}` : "", h("div", { class: "muted" }, `${x.units.length} unit${x.units.length === 1 ? "" : "s"} · order ${x.order_number}`)),
+        ),
+      ),
+      h(
+        "div",
+        { class: "actions" },
+        open && stop.status === "pending"
+          ? h(
+              "button",
+              {
+                class: "secondary",
+                onclick: guarded(async () => {
+                  const at = { arrived_at: new Date().toISOString(), ...(await here()) };
+                  await enqueue("trip.arrive", { trip_id: tripId, stop_id: stopId, ...at }, `${trip.number} ${stopTitle(stop)}: arrived`);
+                  overlayPending();
+                  route();
+                }),
+              },
+              "Arrived",
+            )
+          : null,
+        open ? h("a", { class: "btn", href: `#pod/${tripId}/${stopId}` }, "Deliver") : null,
+        open ? h("a", { class: "btn secondary", href: `#fail/${tripId}/${stopId}` }, "Could not deliver") : null,
+        back(`#trip/${tripId}`),
+      ),
+    );
+  }
+
+  function viewPod(tripId, stopId) {
+    const trip = findTrip(tripId);
+    const stop = trip && trip.stops.find((s) => s.id === stopId);
+    if (!stop || stop.status === "done") return viewStop(tripId, stopId);
+    const units = stop.shipments.flatMap((x) => x.units.map((u) => ({ ...u, shipment: x.number })));
+    const outcome = new Map(units.map((u) => [u.sscc, ""]));
+    const selects = new Map();
+    const scan = h("input", { autocomplete: "off", inputmode: "numeric", placeholder: "Scan each pallet or carton", autofocus: true });
+    scan.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      const code = normaliseSscc(scan.value);
+      scan.value = "";
+      if (!outcome.has(code)) return alert(`${code || "That label"} is not for this stop.`);
+      outcome.set(code, "delivered");
+      selects.get(code).value = "delivered";
+    });
+    const list = h(
+      "ul",
+      { class: "list" },
+      units.map((u) => {
+        const select = h(
+          "select",
+          { onchange: () => outcome.set(u.sscc, select.value) },
+          h("option", { value: "" }, "Not scanned (missing)"),
+          h("option", { value: "delivered" }, "Delivered"),
+          h("option", { value: "damaged" }, "Delivered damaged"),
+          h("option", { value: "refused" }, "Refused"),
+        );
+        selects.set(u.sscc, select);
+        return h("li", {}, h("strong", {}, u.sscc), h("div", { class: "muted" }, `${u.kind} · ${u.shipment}`), select);
+      }),
+    );
+    const allDelivered = h(
+      "button",
+      {
+        type: "button",
+        class: "secondary",
+        onclick: () => {
+          for (const [code, select] of selects) {
+            outcome.set(code, "delivered");
+            select.value = "delivered";
+          }
+        },
+      },
+      "Mark all delivered",
+    );
+    const name = h("input", { autocomplete: "off", placeholder: "Who received the goods?", required: true });
+    const note = h("input", { autocomplete: "off", placeholder: "Anything to report (optional)" });
+    const pad = signaturePad();
+    const camera = photoPicker();
+    const form = h(
+      "form",
+      {
+        onsubmit: guarded(async () => {
+          if (!name.value.trim()) throw new Error("Enter the recipient's name.");
+          if (!pad.signed() && !camera.photos.length) throw new Error("Get a signature or take a photo.");
+          const missing = [...outcome.values()].filter((v) => !v).length;
+          if (missing && !confirm(`${missing} unit${missing === 1 ? "" : "s"} not scanned will be reported missing. Continue?`)) return;
+          const where = await here();
+          const files = [];
+          if (pad.signed()) files.push({ file_id: await saveFile(await pad.blob(), "signature.png", where), kind: "pod_signature", field: "signature" });
+          for (const [n, photo] of camera.photos.entries()) {
+            files.push({ file_id: await saveFile(photo, `pod-${n + 1}.jpg`, where), kind: "pod_photo", field: "photo" });
+          }
+          const payload = {
+            trip_id: tripId,
+            stop_id: stopId,
+            recipient_name: name.value.trim(),
+            signed_at: new Date().toISOString(),
+            ...where,
+            units: [...outcome].filter(([, v]) => v).map(([sscc, status]) => ({ sscc, status })),
+            note: note.value.trim(),
+          };
+          await enqueue("trip.pod", payload, `${trip.number} ${stopTitle(stop)}: delivered to ${payload.recipient_name}`, files);
+          overlayPending();
+          say(state.online ? "Delivery recorded." : "Delivery saved. It will be sent when you have signal.");
+          location.hash = `#trip/${tripId}`;
+        }),
+      },
+      field("Scan", scan),
+      list,
+      allDelivered,
+      field("Recipient", name),
+      pad.nodes,
+      camera.nodes,
+      field("Note", note),
+      h("div", { class: "actions" }, h("button", { type: "submit" }, "Confirm delivery")),
+    );
+    show(h("h1", {}, `Deliver: ${stop.site_name}`), flash(), form, h("div", { class: "actions" }, back(`#stop/${tripId}/${stopId}`)));
+  }
+
+  function viewFail(tripId, stopId) {
+    const trip = findTrip(tripId);
+    const stop = trip && trip.stops.find((s) => s.id === stopId);
+    if (!stop || stop.status === "done") return viewStop(tripId, stopId);
+    const reason = h("select", { required: true }, h("option", { value: "" }, "Choose a reason"), FAILURE_REASONS.map(([value, label]) => h("option", { value }, label)));
+    const note = h("input", { autocomplete: "off", placeholder: "What happened?" });
+    const camera = photoPicker();
+    const form = h(
+      "form",
+      {
+        onsubmit: guarded(async () => {
+          if (!reason.value) throw new Error("Choose a reason.");
+          if (reason.value === "other" && !note.value.trim()) throw new Error("Say what happened.");
+          const where = await here();
+          const files = [];
+          for (const [n, photo] of camera.photos.entries()) {
+            files.push({ file_id: await saveFile(photo, `failed-${n + 1}.jpg`, where), kind: "pod_photo", field: "photo" });
+          }
+          const payload = { trip_id: tripId, stop_id: stopId, reason: reason.value, note: note.value.trim(), failed_at: new Date().toISOString(), ...where };
+          await enqueue("trip.failed", payload, `${trip.number} ${stopTitle(stop)}: not delivered (${reason.value})`, files);
+          overlayPending();
+          say("Failed delivery recorded. Bring the goods back.");
+          location.hash = `#trip/${tripId}`;
+        }),
+      },
+      field("Reason", reason),
+      field("Note", note),
+      camera.nodes,
+      h("div", { class: "actions" }, h("button", { type: "submit", class: "danger" }, "Record failed delivery")),
+    );
+    show(h("h1", {}, `Could not deliver: ${stop.site_name}`), flash(), form, h("div", { class: "actions" }, back(`#stop/${tripId}/${stopId}`)));
+  }
+
+  function routeDriver() {
+    const [page, a, b] = location.hash.slice(1).split("/");
+    switch (page) {
+      case "trip":
+        return viewTrip(a);
+      case "stop":
+        return viewStop(a, b);
+      case "pod":
+        return viewPod(a, b);
+      case "fail":
+        return viewFail(a, b);
+      case "queue":
+        return viewQueue();
+      default:
+        return viewTrips();
+    }
+  }
+
   // --- Session ------------------------------------------------------------------------------------------------
 
   async function startSession(session) {
     state.session = session;
     await db.set("session", session);
     state.history = (await db.get(`history:${session.user_id}`)) || [];
+    if (driverMode()) {
+      state.trips = (await db.get(`trips:${session.user_id}`)) || [];
+      await refreshQueue();
+      overlayPending();
+      syncSoon();
+      return;
+    }
     let res = null;
     try {
       res = await api("GET", "/sites?limit=200");
@@ -1046,6 +1646,7 @@
   function route() {
     renderStatus();
     if (!state.session) return viewLogin();
+    if (driverMode()) return routeDriver();
     if (!state.siteId || location.hash === "#site") return viewSites();
     const [page, id] = location.hash.slice(1).split("/");
     switch (page) {
@@ -1057,6 +1658,8 @@
         return id ? viewPick(id) : viewPickList();
       case "pack":
         return id ? viewPackOrder(id, location.hash.split("/")[2]) : viewPackList();
+      case "load":
+        return id ? viewLoad(id) : viewLoadList();
       case "count":
         return id ? viewCount(id) : viewCountList();
       case "move":
