@@ -207,6 +207,20 @@ def dock_notices(
     return [_expected(notice) for notice in qs.order_by("expected_at", "id")]
 
 
+def notice_references(notice_ids: list[uuid.UUID]) -> dict[uuid.UUID, tuple[str, str]]:
+    """(number, client_ref) per inbound notice, for labelling documents and reports."""
+    rows = InboundNotice.objects.filter(pk__in=notice_ids).values_list("pk", "number", "client_ref")
+    return {pk: (number, client_ref) for pk, number, client_ref in rows}
+
+
+def notices_matching(q: str, *, client_ids, limit: int) -> list[uuid.UUID]:
+    """Inbound notices whose number or client reference starts with `q`. `client_ids=None` means every client."""
+    qs = InboundNotice.objects.filter(Q(number__istartswith=q) | Q(client_ref__istartswith=q))
+    if client_ids is not None:
+        qs = qs.filter(client_id__in=client_ids)
+    return list(qs.order_by("-pk").values_list("pk", flat=True)[:limit])
+
+
 def expected_notice(notice_id: uuid.UUID) -> ExpectedNotice:
     notice = InboundNotice.objects.filter(pk=notice_id).first()
     if notice is None:

@@ -13,8 +13,8 @@ const sites = {
 };
 const items = {
   items: [
-    { id: "i1", sku: "WATER", description: "Water", base_uom: "EA", lot_tracked: false, expiry_tracked: false },
-    { id: "i2", sku: "JUICE", description: "Juice", base_uom: "EA", lot_tracked: true, expiry_tracked: true },
+    { id: "i1", sku: "WATER", description: "Water", base_uom: "EA", lot_tracked: false, expiry_tracked: false, is_active: true },
+    { id: "i2", sku: "JUICE", description: "Juice", base_uom: "EA", lot_tracked: true, expiry_tracked: true, is_active: true },
   ],
   next_cursor: null,
 };

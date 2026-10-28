@@ -1,15 +1,16 @@
 """Public interface of master data. Other modules call these functions or read the models; they never
 write master data tables directly."""
 
+import re
 import uuid
 from datetime import date, timedelta
 from decimal import Decimal
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Max, Q
 from django.utils import timezone
 
-from apps.platform import audit, outbox
+from apps.platform import audit, gs1, outbox
 from apps.platform.apiutils import Problem
 from apps.platform.context import current_actor
 from apps.platform.numbers import next_number
@@ -17,6 +18,7 @@ from apps.platform.numbers import next_number
 from .models import (
     Contract,
     Item,
+    ItemBarcode,
     ItemUom,
     Party,
     PartyRole,
@@ -271,3 +273,49 @@ def client_item(client_id: uuid.UUID, *, sku: str | None = None, barcode: str | 
     if item is None:
         raise Problem(422, "Unknown item", f"No active item {sku or barcode!r} for this client.")
     return item
+
+
+# --- Pack sizes and barcodes -------------------------------------------------------------------------------------
+
+_BARCODE_RE = re.compile(r"^[\x21-\x7e]{1,64}$")
+
+
+def clean_barcode(raw: str) -> str:
+    """A barcode as scanners report it. A GTIN/EAN-length number must carry the right check digit: a scanner
+    verifies it on the printed code, so a typed number that fails can never match a scan."""
+    code = raw.strip()
+    if not _BARCODE_RE.match(code):
+        raise Problem(422, "Invalid barcode", "A barcode is 1 to 64 printable characters without spaces.")
+    if gs1.looks_like_gtin(code) and not gs1.gtin_valid(code):
+        raise Problem(
+            422,
+            "Invalid barcode",
+            f"{code} has the length of a GTIN/EAN but its check digit is wrong; check for a typo.",
+        )
+    return code
+
+
+def add_barcode(item: Item, barcode: str, uom: str = "") -> ItemBarcode:
+    code = clean_barcode(barcode)
+    uom = (uom.strip() or item.base_uom).upper()
+    if uom != item.base_uom and not ItemUom.objects.filter(item=item, uom=uom).exists():
+        raise Problem(422, "Unknown unit", f"{item.sku} has no unit {uom}; add the pack size first.")
+    taken = ItemBarcode.objects.filter(client_id=item.client_id, barcode=code).select_related("item").first()
+    if taken is not None:
+        raise Problem(409, "Barcode in use", f"{code} already belongs to {taken.item.sku}.")
+    try:
+        with transaction.atomic():
+            return ItemBarcode.objects.create(item=item, client_id=item.client_id, barcode=code, uom=uom)
+    except IntegrityError:  # a concurrent add of the same code
+        raise Problem(409, "Barcode in use", f"{code} is already in use.") from None
+
+
+def add_pack_size(item: Item, uom: str, factor: int) -> ItemUom:
+    uom = uom.strip().upper()
+    if ItemUom.objects.filter(item=item, uom=uom).exists():
+        raise Problem(409, "Unit exists", f"{item.sku} already has a {uom} pack size.")
+    try:
+        with transaction.atomic():
+            return ItemUom.objects.create(item=item, uom=uom, factor=factor)
+    except IntegrityError:
+        raise Problem(409, "Unit exists", f"{item.sku} already has a {uom} pack size.") from None

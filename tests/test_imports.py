@@ -15,14 +15,14 @@ def sdb(make_client):
 def test_item_import_creates_items_uoms_barcodes_and_keeps_the_file(admin_api, sdb):
     csv_text = (
         "sku,description,base_uom,case_uom,case_factor,barcode\n"
-        "SDB-001,Sparkling water 500ml,ea,cs,24,6001234000017\n"
+        "SDB-001,Sparkling water 500ml,ea,cs,24,6001234000013\n"
         "SDB-002,Still water 1.5l,EA,,,\n"
     )
     response = admin_api.upload(f"/items:import?client_id={sdb.pk}", csv_text, name="items.csv")
     assert response.status_code == 201, response.content
     assert response.json()["created"] == 2
     assert set(ItemUom.objects.filter(item__sku="SDB-001").values_list("uom", "factor")) == {("EA", 1), ("CS", 24)}
-    assert ItemBarcode.objects.get(barcode="6001234000017").client_id == sdb.pk
+    assert ItemBarcode.objects.get(barcode="6001234000013").client_id == sdb.pk
     doc = Document.objects.get(pk=response.json()["document_id"])
     assert doc.kind == "import_file" and doc.client_id == sdb.pk and doc.original_name == "items.csv"
 

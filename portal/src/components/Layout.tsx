@@ -9,6 +9,8 @@ const SECTIONS = [
   { to: "/inbound", label: "Inbound" },
   { to: "/stock", label: "Stock" },
   { to: "/shipments", label: "Tracking" },
+  { to: "/items", label: "Items" },
+  { to: "/documents", label: "Documents" },
 ];
 
 export function Layout() {

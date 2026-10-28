@@ -29,8 +29,13 @@ export function onSignedOut(listener: Listener): () => void {
   return () => signedOutListeners.delete(listener);
 }
 
-export async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const headers: Record<string, string> = { Accept: "application/json" };
+export async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  extraHeaders: Record<string, string> = {},
+): Promise<T> {
+  const headers: Record<string, string> = { Accept: "application/json", ...extraHeaders };
   if (method !== "GET") {
     headers["X-CSRFToken"] = csrfToken();
     headers["Idempotency-Key"] = crypto.randomUUID();
@@ -55,13 +60,21 @@ export async function request<T>(method: string, path: string, body?: unknown): 
 export const get = <T>(path: string) => request<T>("GET", path);
 export const post = <T>(path: string, body?: unknown) => request<T>("POST", path, body);
 export const del = <T>(path: string) => request<T>("DELETE", path);
+/** A partial update guarded by the record's version: the server answers 412 if someone changed it meanwhile. */
+export const patch = <T>(path: string, body: unknown, version: number) =>
+  request<T>("PATCH", path, body, { "If-Match": String(version) });
 /** Multipart upload, e.g. a CSV file under the field name the endpoint expects. */
 export const upload = <T>(path: string, form: FormData) => request<T>("POST", path, form);
 
-export function query(params: Record<string, string | number | boolean | null | undefined>): string {
+type Param = string | number | boolean | null | undefined;
+
+/** A query string; an array repeats the key (kind=a&kind=b). Empty values are left out. */
+export function query(params: Record<string, Param | Param[]>): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
-    if (value !== null && value !== undefined && value !== "") search.set(key, String(value));
+    for (const one of Array.isArray(value) ? value : [value]) {
+      if (one !== null && one !== undefined && one !== "") search.append(key, String(one));
+    }
   }
   const text = search.toString();
   return text ? `?${text}` : "";

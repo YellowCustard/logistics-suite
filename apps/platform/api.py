@@ -1,20 +1,21 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from django.conf import settings
 from django.contrib.auth import authenticate, login, logout
 from django.db import connection
+from django.db.models import Q
 from django.http import FileResponse
 from django.middleware.csrf import get_token
 from django.utils import timezone
-from ninja import Field, File, Form, Router, Schema, Status
+from ninja import Field, File, Form, Query, Router, Schema, Status
 from ninja.files import UploadedFile
 from ninja.throttling import AnonRateThrottle
 from ninja.utils import check_csrf
 
-from . import documents, exceptions_queue, sync, webhooks
+from . import document_links, documents, exceptions_queue, sync, webhooks
 from .apiutils import Problem, acting_client_id, get_scoped, paginate, principal_of, require_roles, require_staff
 from .auth import issue_token, principal_for_user
 from .models import (
@@ -224,6 +225,49 @@ def _documents_for(principal):
     if principal.all_clients:
         return qs
     return principal.scope(qs)
+
+
+class DocumentListOut(DocumentOut):
+    reference: str = Field("", description="What the document is evidence of, e.g. shipment, order and reference")
+
+
+class DocumentPage(Schema):
+    items: list[DocumentListOut]
+    next_cursor: uuid.UUID | None
+
+
+@platform_router.get("/documents", response=DocumentPage)
+def list_documents(
+    request,
+    kind: Annotated[list[DocumentKind] | None, Query(description="One or more kinds; all kinds when omitted")] = None,
+    q: Annotated[
+        str, Query(max_length=60, description="Start of an order, shipment, notice, receipt or file reference")
+    ] = "",
+    captured_from: Annotated[date | None, Query(description="Captured on or after this day (SAST)")] = None,
+    captured_to: Annotated[date | None, Query(description="Captured on or before this day (SAST)")] = None,
+    cursor: uuid.UUID | None = None,
+    limit: int = 50,
+):
+    """Evidence and files of the caller's clients, newest first: PODs, receipt photos and uploaded files."""
+    principal = principal_of(request)
+    qs = _documents_for(principal)
+    if kind:
+        qs = qs.filter(kind__in=kind)
+    if captured_from:
+        qs = qs.filter(captured_at__date__gte=captured_from)
+    if captured_to:
+        qs = qs.filter(captured_at__date__lte=captured_to)
+    if q := q.strip():
+        matches = Q(original_name__istartswith=q)
+        scope = None if principal.all_clients else principal.client_ids
+        for linked_type, ids in document_links.search(q, scope).items():
+            matches |= Q(linked_type=linked_type, linked_id__in=ids)
+        qs = qs.filter(matches)
+    items, next_cursor = paginate(qs, cursor, limit, newest_first=True)
+    references = document_links.describe(items)
+    for doc in items:
+        doc.reference = references.get(doc.pk, "")
+    return {"items": items, "next_cursor": next_cursor}
 
 
 @platform_router.get("/documents/{document_id}", response=DocumentOut)

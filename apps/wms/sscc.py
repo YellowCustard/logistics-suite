@@ -8,15 +8,10 @@ from django.conf import settings
 from django.db import transaction
 
 from apps.platform.apiutils import Problem
+from apps.platform.gs1 import check_digit
 from apps.platform.models import NumberSequence
 
 SSCC_RE = re.compile(r"^\d{18}$")
-
-
-def check_digit(digits: str) -> str:
-    """GS1 mod-10: weights 3,1,3,1… from the rightmost data digit."""
-    total = sum(int(d) * (3 if i % 2 == 0 else 1) for i, d in enumerate(reversed(digits)))
-    return str((10 - total % 10) % 10)
 
 
 def is_valid(sscc: str) -> bool:
