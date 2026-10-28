@@ -9,7 +9,7 @@ from django.db import models
 from django.db.models import Q
 
 from apps.masterdata.models import Item, Party, Person, Site, Vehicle
-from apps.platform.models import Audited, BaseModel
+from apps.platform.models import Audited, BaseModel, Document
 
 QTY = {"max_digits": 14, "decimal_places": 3}
 
@@ -42,6 +42,7 @@ class Shipment(Audited, BaseModel):
     weight_kg = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     volume_m3 = models.DecimalField(max_digits=12, decimal_places=4, default=0)
     cancelled_at = models.DateTimeField(null=True, blank=True)
+    delivered_at = models.DateTimeField(null=True, blank=True, help_text="When the recipient signed (device time)")
 
     class Meta:
         indexes = [models.Index(fields=["site", "status"], name="shipment_site_status_idx")]
@@ -66,6 +67,17 @@ class ShipmentLine(Audited, BaseModel):
         ]
 
 
+class UnitDeliveryStatus(models.TextChoices):
+    DELIVERED = "delivered"
+    DAMAGED = "damaged", "Delivered damaged"
+    REFUSED = "refused", "Refused by the recipient"
+    MISSING = "missing", "Not found on the vehicle"
+
+
+# Units the recipient kept; refused and missing units are not delivered.
+RECEIVED = (UnitDeliveryStatus.DELIVERED, UnitDeliveryStatus.DAMAGED)
+
+
 class ShipmentUnit(Audited, BaseModel):
     """A closed handling unit (pallet or carton) belonging to a shipment, as reported by WMS."""
 
@@ -77,6 +89,8 @@ class ShipmentUnit(Audited, BaseModel):
     weight_kg = models.DecimalField(max_digits=10, decimal_places=3)
     volume_m3 = models.DecimalField(max_digits=10, decimal_places=4, null=True, blank=True)
     cartons = models.PositiveIntegerField(default=1)
+    contents = models.JSONField(default=list, blank=True, help_text="[{order_line_id, item_id, qty, lot}] from WMS")
+    delivery_status = models.CharField(max_length=10, choices=UnitDeliveryStatus.choices, blank=True)
     loaded_trip = models.ForeignKey("Trip", null=True, blank=True, on_delete=models.PROTECT, related_name="loaded")
     loaded_at = models.DateTimeField(null=True, blank=True)
     loaded_by = models.UUIDField(null=True, blank=True)
@@ -141,6 +155,12 @@ class Trip(Audited, BaseModel):
         return self.number
 
 
+class ArrivalSource(models.TextChoices):
+    MANUAL = "manual", "Driver tapped arrive"
+    GEOFENCE = "geofence", "Vehicle entered the geofence"
+    POD = "pod", "Implied by the proof of delivery"
+
+
 class StopStatus(models.TextChoices):
     PENDING = "pending"
     ARRIVED = "arrived"
@@ -155,6 +175,7 @@ class Stop(Audited, BaseModel):
     window_to = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=10, choices=StopStatus.choices, default=StopStatus.PENDING)
     arrived_at = models.DateTimeField(null=True, blank=True)
+    arrival_source = models.CharField(max_length=10, choices=ArrivalSource.choices, blank=True)
     departed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
@@ -187,3 +208,53 @@ class StopShipment(Audited, BaseModel):
             # A shipment has exactly one pickup and one drop per trip.
             models.UniqueConstraint(fields=["trip", "shipment", "action"], name="stop_shipment_once_per_trip"),
         ]
+
+
+class DeliveryOutcome(models.TextChoices):
+    DELIVERED = "delivered"
+    FAILED = "failed"
+
+
+class FailureReason(models.TextChoices):
+    CLOSED = "closed", "Premises closed"
+    REFUSED = "refused", "Refused by the recipient"
+    NO_ACCESS = "no_access", "No access"
+    WRONG_ADDRESS = "wrong_address", "Wrong or unknown address"
+    DAMAGED = "damaged", "Goods damaged"
+    OUT_OF_TIME = "out_of_time", "Ran out of time"
+    OTHER = "other", "Other (see note)"
+
+
+class DeliveryAttempt(Audited, BaseModel):
+    """What happened at a drop stop: a proof of delivery, or a failed delivery with its reason."""
+
+    stop = models.OneToOneField(Stop, on_delete=models.PROTECT, related_name="attempt")
+    trip = models.ForeignKey(Trip, on_delete=models.PROTECT, related_name="attempts")
+    client = models.ForeignKey(Party, on_delete=models.PROTECT, related_name="+")
+    outcome = models.CharField(max_length=10, choices=DeliveryOutcome.choices)
+    recipient_name = models.CharField(max_length=120, blank=True)
+    reason = models.CharField(max_length=20, choices=FailureReason.choices, blank=True)
+    note = models.TextField(blank=True)
+    captured_at = models.DateTimeField(help_text="Device time of the signature or the failure")
+    captured_by = models.UUIDField(null=True, blank=True)
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    signature = models.ForeignKey(Document, null=True, blank=True, on_delete=models.PROTECT, related_name="+")
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(outcome="delivered", reason="") & ~Q(recipient_name="")
+                | Q(outcome="failed", signature__isnull=True) & ~Q(reason=""),
+                name="delivery_attempt_outcome_fields",
+            ),
+        ]
+
+
+class DeliveryPhoto(Audited, BaseModel):
+    attempt = models.ForeignKey(DeliveryAttempt, on_delete=models.PROTECT, related_name="photos")
+    client = models.ForeignKey(Party, on_delete=models.PROTECT, related_name="+")
+    document = models.ForeignKey(Document, on_delete=models.PROTECT, related_name="+")
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["attempt", "document"], name="delivery_photo_uq")]

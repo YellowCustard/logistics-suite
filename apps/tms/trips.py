@@ -30,6 +30,7 @@ from .models import (
     Stop,
     StopAction,
     StopShipment,
+    StopStatus,
     Trip,
     TripStatus,
 )
@@ -275,6 +276,9 @@ def dispatch(trip_id: uuid.UUID, *, user_id: uuid.UUID | None) -> Trip:
         shipment.save()
     trip.status, trip.dispatched_at, trip.dispatched_by = TripStatus.DISPATCHED, now, user_id
     trip.save()
+    pickup = stops[0]  # the warehouse: loaded and left
+    pickup.status, pickup.arrived_at, pickup.departed_at = StopStatus.DONE, pickup.arrived_at or now, now
+    pickup.save()
     by_stop: dict[uuid.UUID, list[str]] = {}
     for link in links:
         by_stop.setdefault(link.stop_id, []).append(str(link.shipment_id))

@@ -522,8 +522,8 @@ def record_packed(order_id: uuid.UUID) -> SalesOrder | None:
     return order
 
 
-class OrderNotPackedYet(Exception):
-    """Transport dispatched an order whose packed event OMS hasn't applied yet; raising makes the outbox retry."""
+class TransportEventEarly(Exception):
+    """A transport event arrived before the OMS event it follows was applied; raising makes the outbox retry."""
 
 
 @transaction.atomic
@@ -533,7 +533,7 @@ def record_dispatched(order_id: uuid.UUID, *, trip_number: str, shipment_number:
     if order is None or order.status in (OrderStatus.DISPATCHED, OrderStatus.DELIVERED):
         return order
     if order.status == OrderStatus.PICKING:
-        raise OrderNotPackedYet(f"{order.number} is still picking")
+        raise TransportEventEarly(f"{order.number} is still picking")
     if order.status != OrderStatus.PACKED:
         raise ValueError(f"{order.number} is {order.status} and can't have been dispatched")
     order.status = OrderStatus.DISPATCHED
@@ -550,6 +550,40 @@ def record_dispatched(order_id: uuid.UUID, *, trip_number: str, shipment_number:
             "client_ref": order.client_ref,
             "shipment_number": shipment_number,
             "trip_number": trip_number,
+        },
+    )
+    return order
+
+
+@transaction.atomic
+def record_delivered(order_id: uuid.UUID, *, payload: dict) -> SalesOrder | None:
+    """Transport reports the recipient signed for (at least part of) the order."""
+    order = SalesOrder.objects.select_for_update().filter(pk=order_id).first()
+    if order is None or order.status == OrderStatus.DELIVERED:
+        return order
+    if order.status in (OrderStatus.PICKING, OrderStatus.PACKED):
+        raise TransportEventEarly(f"{order.number} hasn't been recorded as dispatched yet")
+    if order.status != OrderStatus.DISPATCHED:
+        raise ValueError(f"{order.number} is {order.status} and can't have been delivered")
+    order.status = OrderStatus.DELIVERED
+    order.save()
+    outbox.emit(
+        "oms.sales_order.delivered",
+        aggregate_type="oms.sales_order",
+        aggregate_id=order.pk,
+        client_id=order.client_id,
+        site_id=order.site_id,
+        payload={
+            "sales_order_id": str(order.pk),
+            "number": order.number,
+            "client_ref": order.client_ref,
+            "shipment_number": payload["number"],
+            "delivered_at": payload["captured_at"],
+            "recipient_name": payload["recipient_name"],
+            "units": payload["units"],
+            "lines": payload["lines"],
+            "signature_document_id": payload["signature_document_id"],
+            "photo_document_ids": payload["photo_document_ids"],
         },
     )
     return order
