@@ -15,10 +15,11 @@ from ninja.files import UploadedFile
 from ninja.throttling import AnonRateThrottle
 from ninja.utils import check_csrf
 
-from . import document_links, documents, exceptions_queue, sync, webhooks
+from . import client_settings, document_links, documents, exceptions_queue, sync, webhooks
 from .apiutils import Problem, acting_client_id, get_scoped, paginate, principal_of, require_roles, require_staff
-from .auth import issue_token, principal_for_user
+from .auth import Principal, create_api_client, issue_token, principal_for_user, rotate_secret
 from .models import (
+    ApiClient,
     Document,
     DocumentKind,
     ExceptionCase,
@@ -120,6 +121,21 @@ def get_session(request):
 @auth_router.delete("/session", response={204: None})
 def delete_session(request):
     logout(request)
+    return Status(204, None)
+
+
+class PasswordSetupIn(Schema):
+    uid: str = Field(..., max_length=64)
+    token: str = Field(..., max_length=128)
+    password: str = Field(..., max_length=256)
+
+
+@auth_router.post("/password", auth=None, response={204: None}, throttle=LOGIN_THROTTLE)
+def complete_password_setup(request, body: PasswordSetupIn):
+    """Set a portal user's password from the setup link their client admin gave them."""
+    if check_csrf(request) is not None:
+        raise Problem(403, "CSRF check failed", "Reload the page and try again.")
+    client_settings.complete_setup(body.uid, body.token, body.password)
     return Status(204, None)
 
 
@@ -530,3 +546,150 @@ def list_webhook_deliveries(request, subscription_id: uuid.UUID, limit: int = 50
     subscription = get_scoped(_subscriptions(principal_of(request)), subscription_id)
     limit = max(1, min(limit, 200))
     return list(subscription.deliveries.select_related("event").order_by("-created_at")[:limit])
+
+
+# --- Client settings: portal users and API credentials ---------------------------------------------------------
+
+
+def _client_admin(principal: Principal) -> uuid.UUID:
+    """The client a client admin manages. Staff manage users and credentials in the admin, and a client's
+    systems may not mint credentials for themselves."""
+    if principal.kind != "user" or not principal.is_client_scoped:
+        raise Problem(403, "Forbidden", "Client administrators only.")
+    require_roles(principal, Role.CLIENT_ADMIN)
+    return next(iter(principal.client_ids))
+
+
+class ClientUserOut(Schema):
+    id: uuid.UUID
+    email: str
+    full_name: str
+    role: str
+    is_active: bool
+    pending: bool = Field(description="Has not set a password yet (or was reset)")
+    last_login: datetime | None
+    date_joined: datetime
+
+    @staticmethod
+    def resolve_role(obj):
+        return client_settings.role_of(obj)
+
+    @staticmethod
+    def resolve_pending(obj):
+        return not obj.has_usable_password()
+
+
+class ClientUserInvitedOut(ClientUserOut):
+    setup_link: str = Field(description="Path with the one-time token in its fragment; pass it on to the user")
+
+
+ClientRole = Literal["client_admin", "client_user"]
+
+
+class ClientUserIn(Schema):
+    email: str = Field(..., max_length=254)
+    full_name: str = Field("", max_length=200)
+    role: ClientRole = "client_user"
+
+
+class ClientUserPatch(Schema):
+    full_name: str | None = Field(None, max_length=200)
+    role: ClientRole | None = None
+    is_active: bool | None = None
+
+
+class SetupLinkOut(Schema):
+    setup_link: str
+
+
+@platform_router.get("/client/users", response=list[ClientUserOut])
+def list_client_users(request):
+    client_id = _client_admin(principal_of(request))
+    return list(client_settings.client_users(client_id).order_by("email"))
+
+
+@platform_router.post("/client/users", response={201: ClientUserInvitedOut})
+def invite_client_user(request, body: ClientUserIn):
+    client_id = _client_admin(principal_of(request))
+    user, link = client_settings.invite(client_id, email=body.email, full_name=body.full_name, role=body.role)
+    user = client_settings.client_users(client_id).get(pk=user.pk)
+    user.setup_link = link
+    return Status(201, user)
+
+
+@platform_router.patch("/client/users/{user_id}", response=ClientUserOut)
+def update_client_user(request, user_id: uuid.UUID, body: ClientUserPatch):
+    principal = principal_of(request)
+    client_id = _client_admin(principal)
+    user = get_scoped(client_settings.client_users(client_id), user_id)
+    changes = {k: v for k, v in body.dict(exclude_unset=True).items() if v is not None}
+    return client_settings.update(user, client_id, acting_user_id=principal.id, changes=changes)
+
+
+@platform_router.post("/client/users/{user_id}/setup-link", response=SetupLinkOut)
+def new_setup_link(request, user_id: uuid.UUID):
+    """A new one-time link. For a user who has a password, this resets it: their password and sessions stop
+    working until they use the link."""
+    principal = principal_of(request)
+    client_id = _client_admin(principal)
+    user = get_scoped(client_settings.client_users(client_id), user_id)
+    if user.pk == principal.id:
+        raise Problem(409, "Not on yourself", "Another admin must reset your password.")
+    if not user.is_active:
+        raise Problem(409, "User inactive", "Reactivate the user first.")
+    return {"setup_link": client_settings.new_setup_link(user, client_id)}
+
+
+class ApiCredentialOut(Schema):
+    id: uuid.UUID
+    name: str
+    key_id: str = Field(description="The OAuth2 client_id for POST /auth/token")
+    is_active: bool
+    last_used_at: datetime | None
+    created_at: datetime
+
+
+class ApiCredentialSecretOut(ApiCredentialOut):
+    secret: str = Field(description="The OAuth2 client_secret. Shown once; store it now.")
+
+
+class ApiCredentialIn(Schema):
+    name: str = Field(..., min_length=1, max_length=120)
+
+
+def _credentials(client_id: uuid.UUID):
+    return ApiClient.objects.filter(client_id=client_id)
+
+
+@platform_router.get("/client/api-credentials", response=list[ApiCredentialOut])
+def list_api_credentials(request):
+    client_id = _client_admin(principal_of(request))
+    return list(_credentials(client_id).order_by("-is_active", "created_at"))
+
+
+@platform_router.post("/client/api-credentials", response={201: ApiCredentialSecretOut})
+def create_api_credential(request, body: ApiCredentialIn):
+    client_id = _client_admin(principal_of(request))
+    credential, secret = create_api_client(name=body.name.strip(), client_id=client_id)
+    return Status(201, {**ApiCredentialOut.from_orm(credential).model_dump(), "secret": secret})
+
+
+@platform_router.post("/client/api-credentials/{credential_id}/rotate", response=ApiCredentialSecretOut)
+def rotate_api_credential(request, credential_id: uuid.UUID):
+    """A new secret for the same key id. The old secret stops working now; tokens already issued with it last
+    until they expire (an hour by default). Revoke instead to cut everything off at once."""
+    credential = get_scoped(_credentials(_client_admin(principal_of(request))), credential_id)
+    if not credential.is_active:
+        raise Problem(409, "Credential revoked", "Create a new credential instead.")
+    secret = rotate_secret(credential)
+    return {**ApiCredentialOut.from_orm(credential).model_dump(), "secret": secret}
+
+
+@platform_router.delete("/client/api-credentials/{credential_id}", response=ApiCredentialOut)
+def revoke_api_credential(request, credential_id: uuid.UUID):
+    """Revoke for good: the secret and every token issued with it stop working at once."""
+    credential = get_scoped(_credentials(_client_admin(principal_of(request))), credential_id)
+    if credential.is_active:
+        credential.is_active = False
+        credential.save(update_fields=["is_active", "updated_at"])
+    return credential

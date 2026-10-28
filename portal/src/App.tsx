@@ -16,6 +16,10 @@ import { NewItem } from "./pages/NewItem";
 import { NewOrder } from "./pages/NewOrder";
 import { OrderDetail } from "./pages/OrderDetail";
 import { Orders } from "./pages/Orders";
+import { Settings } from "./pages/Settings";
+import { ApiCredentials } from "./pages/settings/ApiCredentials";
+import { Users } from "./pages/settings/Users";
+import { Webhooks } from "./pages/settings/Webhooks";
 import { Shipments } from "./pages/Shipments";
 import { SignIn } from "./pages/SignIn";
 import { Stock } from "./pages/Stock";
@@ -23,6 +27,7 @@ import { Tracking } from "./pages/Tracking";
 import { UploadInbound } from "./pages/UploadInbound";
 import { UploadItems } from "./pages/UploadItems";
 import { UploadOrders } from "./pages/UploadOrders";
+import { Welcome } from "./pages/Welcome";
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -56,6 +61,16 @@ export const routes = [
       { path: "items/upload", element: <UploadItems /> },
       { path: "items/:id", element: <ItemDetail /> },
       { path: "documents", element: <Documents /> },
+      {
+        path: "settings",
+        element: <Settings />,
+        children: [
+          { index: true, element: <Navigate to="/settings/users" replace /> },
+          { path: "users", element: <Users /> },
+          { path: "api", element: <ApiCredentials /> },
+          { path: "webhooks", element: <Webhooks /> },
+        ],
+      },
       { path: "*", element: <Navigate to="/" replace /> },
     ],
   },
@@ -65,6 +80,8 @@ const router = createBrowserRouter(routes, { basename: "/portal" });
 
 function Gate() {
   const { session, loading } = useAuth();
+  // A setup link works whoever is signed in on this browser: it sets the password of the user it was made for.
+  if (window.location.pathname === "/portal/welcome") return <Welcome />;
   if (loading) return <Loading />;
   if (!session) return <SignIn />;
   return <RouterProvider router={router} />;

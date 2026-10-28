@@ -64,6 +64,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Complete Password Setup
+         * @description Set a portal user's password from the setup link their client admin gave them.
+         */
+        post: operations["apps_platform_api_complete_password_setup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/session": {
         parameters: {
             query?: never;
@@ -117,6 +137,65 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/client/api-credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Api Credentials */
+        get: operations["apps_platform_api_list_api_credentials"];
+        put?: never;
+        /** Create Api Credential */
+        post: operations["apps_platform_api_create_api_credential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/client/api-credentials/{credential_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke Api Credential
+         * @description Revoke for good: the secret and every token issued with it stop working at once.
+         */
+        delete: operations["apps_platform_api_revoke_api_credential"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/client/api-credentials/{credential_id}/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate Api Credential
+         * @description A new secret for the same key id. The old secret stops working now; tokens already issued with it last
+         *     until they expire (an hour by default). Revoke instead to cut everything off at once.
+         */
+        post: operations["apps_platform_api_rotate_api_credential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/client/exceptions": {
         parameters: {
             query?: never;
@@ -132,6 +211,62 @@ export interface paths {
         get: operations["apps_platform_api_list_client_exceptions"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/client/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Client Users */
+        get: operations["apps_platform_api_list_client_users"];
+        put?: never;
+        /** Invite Client User */
+        post: operations["apps_platform_api_invite_client_user"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/client/users/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Client User */
+        patch: operations["apps_platform_api_update_client_user"];
+        trace?: never;
+    };
+    "/api/v1/client/users/{user_id}/setup-link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * New Setup Link
+         * @description A new one-time link. For a user who has a password, this resets it: their password and sessions stop
+         *     working until they use the link.
+         */
+        post: operations["apps_platform_api_new_setup_link"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2039,6 +2174,64 @@ export interface components {
              */
             site_id: string;
         };
+        /** ApiCredentialIn */
+        ApiCredentialIn: {
+            /** Name */
+            name: string;
+        };
+        /** ApiCredentialOut */
+        ApiCredentialOut: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Is Active */
+            is_active: boolean;
+            /**
+             * Key Id
+             * @description The OAuth2 client_id for POST /auth/token
+             */
+            key_id: string;
+            /** Last Used At */
+            last_used_at: string | null;
+            /** Name */
+            name: string;
+        };
+        /** ApiCredentialSecretOut */
+        ApiCredentialSecretOut: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Is Active */
+            is_active: boolean;
+            /**
+             * Key Id
+             * @description The OAuth2 client_id for POST /auth/token
+             */
+            key_id: string;
+            /** Last Used At */
+            last_used_at: string | null;
+            /** Name */
+            name: string;
+            /**
+             * Secret
+             * @description The OAuth2 client_secret. Shown once; store it now.
+             */
+            secret: string;
+        };
         /** ArriveIn */
         ArriveIn: {
             /** Arrived At */
@@ -2316,6 +2509,92 @@ export interface components {
             trading_name?: string | null;
             /** Vat Number */
             vat_number?: string | null;
+        };
+        /** ClientUserIn */
+        ClientUserIn: {
+            /** Email */
+            email: string;
+            /**
+             * Full Name
+             * @default
+             */
+            full_name: string;
+            /**
+             * Role
+             * @default client_user
+             * @enum {string}
+             */
+            role: "client_admin" | "client_user";
+        };
+        /** ClientUserInvitedOut */
+        ClientUserInvitedOut: {
+            /**
+             * Date Joined
+             * Format: date-time
+             */
+            date_joined: string;
+            /** Email */
+            email: string;
+            /** Full Name */
+            full_name: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Is Active */
+            is_active: boolean;
+            /** Last Login */
+            last_login: string | null;
+            /**
+             * Pending
+             * @description Has not set a password yet (or was reset)
+             */
+            pending: boolean;
+            /** Role */
+            role: string;
+            /**
+             * Setup Link
+             * @description Path with the one-time token in its fragment; pass it on to the user
+             */
+            setup_link: string;
+        };
+        /** ClientUserOut */
+        ClientUserOut: {
+            /**
+             * Date Joined
+             * Format: date-time
+             */
+            date_joined: string;
+            /** Email */
+            email: string;
+            /** Full Name */
+            full_name: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Is Active */
+            is_active: boolean;
+            /** Last Login */
+            last_login: string | null;
+            /**
+             * Pending
+             * @description Has not set a password yet (or was reset)
+             */
+            pending: boolean;
+            /** Role */
+            role: string;
+        };
+        /** ClientUserPatch */
+        ClientUserPatch: {
+            /** Full Name */
+            full_name?: string | null;
+            /** Is Active */
+            is_active?: boolean | null;
+            /** Role */
+            role?: ("client_admin" | "client_user") | null;
         };
         /** CloseUnitIn */
         CloseUnitIn: {
@@ -3417,6 +3696,15 @@ export interface components {
             /** Uom */
             uom: string;
         };
+        /** PasswordSetupIn */
+        PasswordSetupIn: {
+            /** Password */
+            password: string;
+            /** Token */
+            token: string;
+            /** Uid */
+            uid: string;
+        };
         /** PhotoRef */
         PhotoRef: {
             /**
@@ -4210,6 +4498,11 @@ export interface components {
              * Format: uuid
              */
             user_id: string;
+        };
+        /** SetupLinkOut */
+        SetupLinkOut: {
+            /** Setup Link */
+            setup_link: string;
         };
         /** ShipToIn */
         ShipToIn: {
@@ -5212,6 +5505,28 @@ export interface operations {
             };
         };
     };
+    apps_platform_api_complete_password_setup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordSetupIn"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     apps_platform_api_get_session: {
         parameters: {
             query?: never;
@@ -5329,6 +5644,94 @@ export interface operations {
             };
         };
     };
+    apps_platform_api_list_api_credentials: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiCredentialOut"][];
+                };
+            };
+        };
+    };
+    apps_platform_api_create_api_credential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApiCredentialIn"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiCredentialSecretOut"];
+                };
+            };
+        };
+    };
+    apps_platform_api_revoke_api_credential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                credential_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiCredentialOut"];
+                };
+            };
+        };
+    };
+    apps_platform_api_rotate_api_credential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                credential_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiCredentialSecretOut"];
+                };
+            };
+        };
+    };
     apps_platform_api_list_client_exceptions: {
         parameters: {
             query?: {
@@ -5349,6 +5752,98 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClientExceptionPage"];
+                };
+            };
+        };
+    };
+    apps_platform_api_list_client_users: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClientUserOut"][];
+                };
+            };
+        };
+    };
+    apps_platform_api_invite_client_user: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClientUserIn"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClientUserInvitedOut"];
+                };
+            };
+        };
+    };
+    apps_platform_api_update_client_user: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClientUserPatch"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClientUserOut"];
+                };
+            };
+        };
+    };
+    apps_platform_api_new_setup_link: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupLinkOut"];
                 };
             };
         };
