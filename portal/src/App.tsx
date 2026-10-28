@@ -5,9 +5,15 @@ import { ApiError } from "./api/client";
 import { AuthProvider, useAuth } from "./auth";
 import { Layout } from "./components/Layout";
 import { Loading } from "./components/ui";
+import { Home } from "./pages/Home";
+import { NewOrder } from "./pages/NewOrder";
+import { OrderDetail } from "./pages/OrderDetail";
+import { Orders } from "./pages/Orders";
 import { Shipments } from "./pages/Shipments";
 import { SignIn } from "./pages/SignIn";
+import { Stock } from "./pages/Stock";
 import { Tracking } from "./pages/Tracking";
+import { UploadOrders } from "./pages/UploadOrders";
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -24,7 +30,12 @@ export const routes = [
     path: "/",
     element: <Layout />,
     children: [
-      { index: true, element: <Navigate to="/shipments" replace /> },
+      { index: true, element: <Home /> },
+      { path: "orders", element: <Orders /> },
+      { path: "orders/new", element: <NewOrder /> },
+      { path: "orders/upload", element: <UploadOrders /> },
+      { path: "orders/:id", element: <OrderDetail /> },
+      { path: "stock", element: <Stock /> },
       { path: "shipments", element: <Shipments /> },
       { path: "shipments/:id", element: <Tracking /> },
       { path: "*", element: <Navigate to="/" replace /> },

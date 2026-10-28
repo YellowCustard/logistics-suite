@@ -35,12 +35,13 @@ export async function request<T>(method: string, path: string, body?: unknown): 
     headers["X-CSRFToken"] = csrfToken();
     headers["Idempotency-Key"] = crypto.randomUUID();
   }
-  if (body !== undefined) headers["Content-Type"] = "application/json";
+  const form = body instanceof FormData;
+  if (body !== undefined && !form) headers["Content-Type"] = "application/json"; // the browser sets multipart's
   const response = await fetch(BASE + path, {
     method,
     credentials: "same-origin",
     headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: body === undefined ? undefined : form ? body : JSON.stringify(body),
   });
   const text = await response.text();
   const data = text ? JSON.parse(text) : null;
@@ -54,6 +55,8 @@ export async function request<T>(method: string, path: string, body?: unknown): 
 export const get = <T>(path: string) => request<T>("GET", path);
 export const post = <T>(path: string, body?: unknown) => request<T>("POST", path, body);
 export const del = <T>(path: string) => request<T>("DELETE", path);
+/** Multipart upload, e.g. a CSV file under the field name the endpoint expects. */
+export const upload = <T>(path: string, form: FormData) => request<T>("POST", path, form);
 
 export function query(params: Record<string, string | number | boolean | null | undefined>): string {
   const search = new URLSearchParams();

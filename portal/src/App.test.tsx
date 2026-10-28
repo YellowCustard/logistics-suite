@@ -43,6 +43,8 @@ it("signs a client in to the portal and shows their shipments, newest first", as
   await userEvent.type(screen.getByLabelText("Password"), "pw-123456789");
   await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
+  expect(await screen.findByRole("heading", { name: "Home" })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("link", { name: "Tracking" }));
   expect(await screen.findByRole("link", { name: "SHP-000002" })).toHaveAttribute("href", "/portal/shipments/s1");
   expect(screen.getByText("buyer@sdb.example")).toBeInTheDocument();
   const signIn = calls.find((c) => c.method === "POST" && c.path === "/auth/session");

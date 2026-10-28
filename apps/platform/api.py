@@ -17,7 +17,16 @@ from ninja.utils import check_csrf
 from . import documents, exceptions_queue, sync, webhooks
 from .apiutils import Problem, acting_client_id, get_scoped, paginate, principal_of, require_roles, require_staff
 from .auth import issue_token, principal_for_user
-from .models import Document, DocumentKind, ExceptionCase, OutboxEvent, Role, WebhookDelivery, WebhookSubscription
+from .models import (
+    Document,
+    DocumentKind,
+    ExceptionCase,
+    ExceptionStatus,
+    OutboxEvent,
+    Role,
+    WebhookDelivery,
+    WebhookSubscription,
+)
 
 auth_router = Router(tags=["auth"])
 platform_router = Router(tags=["platform"])
@@ -278,6 +287,54 @@ def list_exceptions(
     if kind:
         qs = qs.filter(kind=kind)
     items, next_cursor = paginate(qs, cursor, limit)
+    return {"items": items, "next_cursor": next_cursor}
+
+
+# What a client sees of the exception queue: cases about its own orders, receipts, deliveries and webhooks.
+# Stock checks (counts, corrections) are the warehouse's business and stay internal.
+CLIENT_EXCEPTION_KINDS = (
+    "allocation.short",
+    "pick.short",
+    "receipt.variance",
+    "delivery.exception",
+    "delivery.failed",
+    "webhook.dead_letter",
+)
+
+
+class ClientExceptionOut(Schema):
+    id: uuid.UUID
+    kind: str
+    severity: str
+    status: str
+    summary: str
+    entity_type: str
+    entity_id: str
+    created_at: datetime
+    resolved_at: datetime | None
+
+
+class ClientExceptionPage(Schema):
+    items: list[ClientExceptionOut]
+    next_cursor: uuid.UUID | None
+
+
+@platform_router.get("/client/exceptions", response=ClientExceptionPage)
+def list_client_exceptions(
+    request,
+    open_only: bool = True,
+    cursor: uuid.UUID | None = None,
+    limit: int = 50,
+):
+    """For client users and client systems: the open cases (or all, with `open_only=false`) that affect the
+    client, newest first. Staff use `GET /exceptions`."""
+    principal = principal_of(request)
+    if not principal.is_client_scoped:
+        raise Problem(403, "Forbidden", "This list is for clients; staff use GET /exceptions.")
+    qs = principal.scope(ExceptionCase.objects.filter(kind__in=CLIENT_EXCEPTION_KINDS))
+    if open_only:
+        qs = qs.exclude(status=ExceptionStatus.RESOLVED)
+    items, next_cursor = paginate(qs, cursor, limit, newest_first=True)
     return {"items": items, "next_cursor": next_cursor}
 
 

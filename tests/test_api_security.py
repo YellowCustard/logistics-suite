@@ -135,7 +135,7 @@ def test_client_user_is_pinned_to_one_client_and_kept_off_staff_endpoints(two_cl
     a, _ = two_clients
     api = api_for(make_user("buyer@sdb.example", Role.CLIENT_USER, client_ids=[a.pk]))
     assert [i["sku"] for i in api.get("/items").json()["items"]] == ["SDB-1"]
-    assert api.get("/sites").status_code == 403
+    assert api.get("/sites").json()["items"] == []  # no warehouses or addresses in this fixture
     assert api.get("/exceptions").status_code == 403
 
 

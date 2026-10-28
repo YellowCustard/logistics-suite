@@ -5,6 +5,43 @@ export const when = (iso: string | null | undefined) => (iso ? dateTime.format(n
 /** A calendar date ("2026-10-28") shown as a local date, without a time-zone shift. */
 export const day = (iso: string | null | undefined) => (iso ? dateOnly.format(new Date(`${iso}T00:00:00`)) : "—");
 
+/** Today's date in South Africa ("2026-10-28"), the day the server's date filters use. */
+export const today = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Johannesburg" }).format(new Date());
+
+const number = new Intl.NumberFormat("en-ZA", { maximumFractionDigits: 3 });
+/** A decimal quantity from the API ("15.000") without trailing zeros, grouped for reading. */
+export const qty = (value: string | number | null | undefined) =>
+  value === null || value === undefined || value === "" ? "—" : number.format(Number(value));
+
+export const ORDER_STATUS: Record<string, string> = {
+  accepted: "Accepted",
+  allocated: "Stock reserved",
+  backordered: "Short of stock",
+  picking: "Being picked",
+  packed: "Packed",
+  dispatched: "On its way",
+  delivered: "Delivered",
+  cancelled: "Cancelled",
+};
+
+/** Statuses of an order that is still moving, in the order it moves through them. */
+export const OPEN_ORDER_STATUSES = ["accepted", "allocated", "backordered", "picking", "packed", "dispatched"];
+
+export const STOCK_STATUS: Record<string, string> = {
+  available: "Available",
+  quarantine: "Quarantine",
+  damaged: "Damaged",
+};
+
+export const CASE_KIND: Record<string, string> = {
+  "allocation.short": "Order short of stock",
+  "pick.short": "Short at picking",
+  "receipt.variance": "Receipt differs from notice",
+  "delivery.exception": "Delivery exception",
+  "delivery.failed": "Delivery failed",
+  "webhook.dead_letter": "Webhook failing",
+};
+
 export const SHIPMENT_STATUS: Record<string, string> = {
   draft: "Being packed",
   ready: "Ready to plan",

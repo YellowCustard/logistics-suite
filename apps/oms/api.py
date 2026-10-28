@@ -1,10 +1,11 @@
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Annotated
 
-from django.db.models import QuerySet
-from ninja import Field, File, Router, Schema, Status
+from django.db.models import Count, Q, QuerySet
+from django.utils import timezone
+from ninja import Field, File, Query, Router, Schema, Status
 from ninja.files import UploadedFile
 from pydantic import BaseModel, ConfigDict, StringConstraints
 
@@ -13,10 +14,10 @@ from apps.masterdata.models import Site
 from apps.platform import csvimport
 from apps.platform.apiutils import Problem, acting_client_id, get_scoped, paginate, principal_of, require_roles
 from apps.platform.auth import Principal
-from apps.platform.models import Role
+from apps.platform.models import AuditEntry, Role
 
 from . import services
-from .models import InboundKind, InboundNotice, InboundStatus, OrderStatus, SalesOrder
+from .models import CANCELLABLE, InboundKind, InboundNotice, InboundStatus, OrderStatus, SalesOrder
 
 router = Router(tags=["orders"])
 
@@ -288,6 +289,7 @@ class SalesOrderOut(Schema):
     ship_to: ShipToOut
     required_by: date | None
     status: str
+    can_cancel: bool = Field(..., description="Cancellation is possible until picking starts")
     contact_name: str
     contact_phone: str
     delivery_instructions: str
@@ -295,6 +297,10 @@ class SalesOrderOut(Schema):
     cancelled_reason: str
     created_at: datetime
     lines: list[OrderLineOut]
+
+    @staticmethod
+    def resolve_can_cancel(obj: SalesOrder) -> bool:
+        return obj.status in CANCELLABLE
 
     @staticmethod
     def resolve_lines(obj: SalesOrder):
@@ -308,9 +314,14 @@ class SalesOrderSummary(Schema):
     site_id: uuid.UUID
     client_ref: str
     ship_to_id: uuid.UUID
+    ship_to_name: str
     required_by: date | None
     status: str
     created_at: datetime
+
+    @staticmethod
+    def resolve_ship_to_name(obj) -> str:
+        return obj.ship_to.name
 
 
 class SalesOrderPage(Schema):
@@ -448,18 +459,73 @@ def list_orders(
     status: OrderStatus | None = None,
     site_id: uuid.UUID | None = None,
     required_by: date | None = None,
+    q: Annotated[str, Query(max_length=60, description="Order number or your reference, or the start of it")] = "",
+    newest_first: bool = False,
     cursor: uuid.UUID | None = None,
     limit: int = 50,
 ):
-    qs = _orders(principal_of(request))
+    qs = _orders(principal_of(request)).select_related("ship_to")
     if status:
         qs = qs.filter(status=status)
     if site_id:
         qs = qs.filter(site_id=site_id)
     if required_by:
         qs = qs.filter(required_by__lte=required_by)
-    items, next_cursor = paginate(qs, cursor, limit)
+    if q.strip():
+        term = q.strip()
+        qs = qs.filter(Q(number__istartswith=term) | Q(client_ref__istartswith=term))
+    items, next_cursor = paginate(qs, cursor, limit, newest_first=newest_first)
     return {"items": items, "next_cursor": next_cursor}
+
+
+# Finished orders count only when they finished recently; open ones count however old they are.
+RECENT_DAYS = 7
+FINISHED = (OrderStatus.DELIVERED, OrderStatus.CANCELLED)
+
+
+class OrderCountsOut(Schema):
+    counts: dict[str, int] = Field(..., description="Every status, zero included")
+    finished_since: datetime = Field(..., description="Delivered and cancelled orders count from this time")
+
+
+@router.get("/orders/status-counts", response=OrderCountsOut)
+def order_status_counts(request, site_id: uuid.UUID | None = None):
+    """Orders by status: every open order, plus orders delivered or cancelled in the last 7 days."""
+    since = timezone.now() - timedelta(days=RECENT_DAYS)
+    qs = _orders(principal_of(request)).filter(~Q(status__in=FINISHED) | Q(updated_at__gte=since))
+    if site_id:
+        qs = qs.filter(site_id=site_id)
+    counts = dict.fromkeys(OrderStatus.values, 0)
+    counts.update(dict(qs.order_by().values_list("status").annotate(n=Count("id"))))
+    return {"counts": counts, "finished_since": since}
+
+
+class OrderEventOut(Schema):
+    at: datetime
+    status: str
+    detail: str = ""
+
+
+def _status_history(order: SalesOrder) -> list[dict]:
+    """Status changes from the audit log: every order change is audited, so this is the complete history."""
+    entries = AuditEntry.objects.filter(entity_type="oms.salesorder", entity_id=str(order.pk)).order_by(
+        "occurred_at", "id"
+    )
+    events, last = [], None
+    for entry in entries.only("occurred_at", "after"):
+        status = (entry.after or {}).get("status")
+        if status and status != last:
+            detail = order.cancelled_reason if status == OrderStatus.CANCELLED else ""
+            events.append({"at": entry.occurred_at, "status": status, "detail": detail})
+            last = status
+    return events
+
+
+@router.get("/orders/{order_id}/timeline", response=list[OrderEventOut])
+def order_timeline(request, order_id: uuid.UUID):
+    """The order's status changes, oldest first. Delivery detail (ETA, proof of delivery) is on its shipment:
+    `GET /shipments?sales_order_id=`."""
+    return _status_history(get_scoped(_orders(principal_of(request)), order_id))
 
 
 @router.get("/orders/{order_id}", response=SalesOrderOut)

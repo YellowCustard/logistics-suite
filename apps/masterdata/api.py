@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from django.db.models import QuerySet
+from django.db.models import Q, QuerySet
 from ninja import File, Header, Router, Schema, Status
 from ninja.files import UploadedFile
 
@@ -21,6 +21,7 @@ from .models import (
     RateCard,
     RateCardStatus,
     Site,
+    SiteKind,
     Vehicle,
 )
 
@@ -140,14 +141,23 @@ class SitePage(Schema):
 
 
 def _sites(principal: Principal) -> QuerySet:
+    if principal.is_client_scoped:
+        # Clients see the warehouses they can ship from and their own delivery addresses, active ones only.
+        return Site.objects.filter(is_active=True).filter(
+            Q(kind=SiteKind.WAREHOUSE) | Q(kind=SiteKind.DELIVERY_ADDRESS, party_id__in=principal.client_ids)
+        )
     require_staff(principal)
     qs = Site.objects.all()
     return qs if principal.all_sites else qs.filter(pk__in=principal.site_ids)
 
 
 @router.get("/sites", response=SitePage)
-def list_sites(request, cursor: uuid.UUID | None = None, limit: int = 50):
-    items, next_cursor = paginate(_sites(principal_of(request)), cursor, limit)
+def list_sites(request, kind: SiteKind | None = None, cursor: uuid.UUID | None = None, limit: int = 50):
+    """Staff see the sites they work at. Clients see active warehouses and their own delivery addresses."""
+    qs = _sites(principal_of(request))
+    if kind:
+        qs = qs.filter(kind=kind)
+    items, next_cursor = paginate(qs, cursor, limit)
     return {"items": items, "next_cursor": next_cursor}
 
 

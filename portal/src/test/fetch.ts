@@ -14,7 +14,7 @@ export function mockApi(routes: Record<string, Route | { status?: number; json?:
         method: init.method ?? "GET",
         path,
         headers: (init.headers ?? {}) as Record<string, string>,
-        body: init.body ? JSON.parse(String(init.body)) : undefined,
+        body: init.body instanceof FormData ? init.body : init.body ? JSON.parse(String(init.body)) : undefined,
       };
       calls.push(call);
       const key = `${call.method} ${path.split("?")[0]}`;

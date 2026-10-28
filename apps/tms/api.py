@@ -6,7 +6,7 @@ from typing import Annotated
 from django.contrib.auth import login
 from django.db.models import Count, Prefetch, Q, QuerySet, Sum
 from django.utils import timezone
-from ninja import Field, File, Form, Router, Schema, Status
+from ninja import Field, File, Form, Query, Router, Schema, Status
 from ninja.files import UploadedFile
 from ninja.utils import check_csrf
 
@@ -117,6 +117,7 @@ def list_shipments(
     site_id: uuid.UUID | None = None,
     status: ShipmentStatus | None = None,
     sales_order_id: uuid.UUID | None = None,
+    delivered_on: Annotated[date | None, Query(description="Delivered on this day (South African time)")] = None,
     newest_first: bool = False,
     cursor: uuid.UUID | None = None,
     limit: int = 50,
@@ -128,6 +129,8 @@ def list_shipments(
         qs = qs.filter(status=status)
     if sales_order_id:
         qs = qs.filter(sales_order_id=sales_order_id)
+    if delivered_on:
+        qs = qs.filter(delivered_at__date=delivered_on)  # in TIME_ZONE (USE_TZ)
     items, next_cursor = paginate(qs, cursor, limit, newest_first=newest_first)
     return {"items": items, "next_cursor": next_cursor}
 
