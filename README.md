@@ -3,7 +3,8 @@
 Nuronteq: contract warehousing, transport and billing for a South African 3PL. A Django modular monolith on one
 PostgreSQL database, built milestone by milestone from the Phase 1 Delivery Specification. Done so far:
 M0 (platform services, master data, bins), M1 (ASNs, receiving, inventory ledger, putaway, cycle counts,
-the offline scanner PWA) and the first part of M2 (sales orders, allocation, waves and picking).
+the offline scanner PWA), M2 (sales orders, allocation, waves, picking, packing, webhooks) and the first part of
+M3 (shipments, trips, load scan and dispatch).
 
 ## Layout
 
@@ -13,12 +14,14 @@ the offline scanner PWA) and the first part of M2 (sales orders, allocation, wav
 | `apps/masterdata` | Clients and other parties, sites, items (UoMs, barcodes), vehicles, drivers, contracts, versioned rate cards |
 | `apps/oms` | Inbound notices (ASNs and returns) and outbound sales orders (API, CSV import, cancellation) |
 | `apps/wms` | Bins, receiving, the inventory ledger (`ledger.py`, the only code that changes stock), putaway, allocation (`allocation.py`, FEFO then FIFO), waves and picking (`picking.py`), packing into handling units with SSCC labels (`packing.py`, `sscc.py`, `labels.py`) |
+| `apps/tms` | Transport: shipments built from order and packing events (`shipments.py`), trips with stops, own-fleet or carrier assignment, load scanning and dispatch (`trips.py`) |
 | `config` | Settings (environment-driven), URLs, API root |
 | `tests` | pytest suite against real PostgreSQL, including the M0 exit test (onboarding through CSV and the API) and the M2 exit test (`test_m2_exit.py`: a simulated week of 20 orders a day received, picked and packed through the API only) |
 
 Module boundaries are enforced by import-linter (`pyproject.toml`): `platform` imports no business module,
 `masterdata` imports no other business module, `oms` never imports `wms`, and `wms` reaches `oms` only through
-`oms.services`. Business modules reach master data only through its models and `services`.
+`oms.services`. `tms` learns about orders and packing only from events and imports neither `oms` nor `wms`;
+neither of them imports `tms`. Business modules reach master data only through its models and `services`.
 
 ## Run locally
 
@@ -84,6 +87,8 @@ CI (`.github/workflows/ci.yml`) runs all of the above plus `check --deploy` and 
 | Inventory reconciliation | Schedule `manage.py reconcile_inventory` nightly. It compares every balance with its movement ledger and opens a critical `inventory.ledger_drift` case on any difference, and checks each balance's allocated quantity against its open allocations (`inventory.allocation_drift`). |
 | Waves and picking | A supervisor plans a wave from allocated orders (`POST /waves`, up to 200) and releases it (`POST /waves/{id}/release`). Release moves the orders to `picking` (no more cancellation), drops any that were cancelled or went short since planning, and creates one pick task per allocation. Operators pick on the scanner in bin order: scan bin, scan item, confirm the quantity. A short pick (`POST /pick-tasks/{id}/short`, reason required) takes what was found, looks for the rest in other bins and adds those tasks to the same wave; if nothing is left it emits `wms.allocation.shorted` and opens a high `pick.short` case. Every short also opens an `inventory.short_pick` case to count that bin. The wave completes when every task is done or short (`wms.pick_wave.completed`). |
 | Packing | At the packing bench (scanner **Pack**, online only) an operator starts a carton or pallet for an order in picking (`POST /handling-units`); it gets its SSCC at once. Scans add picked stock (`POST /handling-units/{id}/contents`, item barcode or SKU, base units, lot only when more than one was picked); nothing can be packed beyond what was picked. Closing (`POST /handling-units/{id}/close`) needs the weight, and the carton count for a pallet. Closed units can't change (database trigger). The label is `GET /handling-units/{id}/label` (4x6 inch PDF) or `?format=zpl` for Zebra printers. When picking is finished and everything picked is in closed units, the order becomes `packed` (`oms.sales_order.packed`). |
+| Trips and dispatch | Every accepted order becomes a draft shipment; it is `ready` once its last unit is closed. A dispatcher starts a trip at a warehouse (`POST /trips`), sets its drop stops in visiting order (`PUT /trips/{id}/stops`; stop 1, the pickup, is added), and assigns either an own vehicle and driver or a carrier with the agreed cost (`POST /trips/{id}/assign`; expired licence disc, roadworthy, licence or PrDP is refused). Loaders scan each unit's SSCC onto the trip (`POST /trips/{id}/load`, undo with `DELETE /trips/{id}/load/{sscc}`). Dispatch (`POST /trips/{id}/dispatch`) needs every shipment packed and every unit loaded, and the vehicle and driver back from any earlier trip; it emits `tms.trip.dispatched`, and each order becomes `dispatched` (`oms.sales_order.dispatched`, offered as a webhook). The board is `GET /trips?site_id=&on=`. |
+| Transport backfill | Once, after the first deploy that includes `apps.tms`: `manage.py backfill_shipments` builds shipments for orders accepted earlier by replaying their events from the outbox. Running it again changes nothing. |
 | SSCC prefix | Set `GS1_COMPANY_PREFIX` (from GS1 South Africa) and `SSCC_EXTENSION_DIGIT`. Without a prefix, packing refuses to start units (503). SSCC serials come from one counter that never resets. Until the GS1 membership is through, staging can use `0000000`; those labels are for testing only. |
 | Allocation | Every accepted order allocates at once: available stock in storage and pick-face bins only, earliest expiry first, then oldest arrival, then pick path. Expired, quarantined and dock stock is never allocated. A short order keeps what it got, becomes `backordered`, emits `wms.allocation.shorted` and opens one `allocation.short` case. After new stock is put away, a supervisor tops backorders up with `POST /allocations:run` (`site_id`, optional `sales_order_ids`); the case resolves when the order is full. Cancelling an order releases its reservations. |
 | Cycle counts | A supervisor opens a count on a set of bins (`POST /cycle-counts`). Operators scan what they find; they see only their own lines, never system quantities. Uncounted stock in those bins counts as zero on submit. Variances within `INVENTORY_VARIANCE_APPROVAL_PCT` (default 2%) post at once; anything larger, or any stock found in an empty bin, waits for a site manager who neither counted nor submitted it. |
@@ -163,3 +168,15 @@ CI (`.github/workflows/ci.yml`) runs all of the above plus `check --deploy` and 
   checked by decoding rendered labels with zxing during development.
 - Every pick locks its wave row, so picks within one wave run one at a time. At pilot volumes that's invisible,
   and it guarantees the wave completes exactly once.
+
+## Deliberate deviations and assumptions (M3)
+
+- One shipment per sales order, created from `oms.sales_order.accepted`; there is no `POST /shipments`. Splitting an
+  order over two trips, or consolidating orders into one shipment, waits for a real need.
+- TMS keeps its own copy of what it needs from orders and handling units (lines, SSCCs, weights) rather than reading
+  OMS or WMS tables. Its view can lag the warehouse by one outbox cycle.
+- A shipment can be planned onto a trip before it is packed; dispatch waits for packing. A shipment rides on one
+  active trip at a time, and taking it off a trip needs its units unloaded first.
+- Stops are replaced as a whole while planning (stop ids change on each `PUT`), and frozen at dispatch.
+- Double booking of a vehicle or driver is checked at dispatch (not while planning), against trips still out.
+- A cancelled order leaves any trip still being planned; stops left empty are removed and the rest renumbered.

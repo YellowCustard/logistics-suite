@@ -520,3 +520,36 @@ def record_packed(order_id: uuid.UUID) -> SalesOrder | None:
         payload={"sales_order_id": str(order.pk), "number": order.number, "client_ref": order.client_ref},
     )
     return order
+
+
+class OrderNotPackedYet(Exception):
+    """Transport dispatched an order whose packed event OMS hasn't applied yet; raising makes the outbox retry."""
+
+
+@transaction.atomic
+def record_dispatched(order_id: uuid.UUID, *, trip_number: str, shipment_number: str) -> SalesOrder | None:
+    """Transport reports that the order left the warehouse on a trip."""
+    order = SalesOrder.objects.select_for_update().filter(pk=order_id).first()
+    if order is None or order.status in (OrderStatus.DISPATCHED, OrderStatus.DELIVERED):
+        return order
+    if order.status == OrderStatus.PICKING:
+        raise OrderNotPackedYet(f"{order.number} is still picking")
+    if order.status != OrderStatus.PACKED:
+        raise ValueError(f"{order.number} is {order.status} and can't have been dispatched")
+    order.status = OrderStatus.DISPATCHED
+    order.save()
+    outbox.emit(
+        "oms.sales_order.dispatched",
+        aggregate_type="oms.sales_order",
+        aggregate_id=order.pk,
+        client_id=order.client_id,
+        site_id=order.site_id,
+        payload={
+            "sales_order_id": str(order.pk),
+            "number": order.number,
+            "client_ref": order.client_ref,
+            "shipment_number": shipment_number,
+            "trip_number": trip_number,
+        },
+    )
+    return order

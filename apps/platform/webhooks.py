@@ -59,6 +59,7 @@ WEBHOOK_EVENTS = (
     "oms.sales_order.packed",
     "wms.handling_unit.closed",
     "wms.inventory.adjusted",
+    "oms.sales_order.dispatched",
 )
 PING = "platform.webhook.ping"
 MAX_SUBSCRIPTIONS_PER_CLIENT = 10

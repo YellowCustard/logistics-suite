@@ -8,6 +8,7 @@ from apps.oms.api import router as oms_router
 from apps.platform.api import auth_router, health_router, platform_router
 from apps.platform.apiutils import Problem
 from apps.platform.auth import BearerTokenAuth, PrincipalSessionAuth
+from apps.tms.api import router as tms_router
 from apps.wms.api import router as wms_router
 
 api = NinjaAPI(
@@ -58,3 +59,4 @@ api.add_router("/", platform_router)
 api.add_router("/", masterdata_router)
 api.add_router("/", oms_router)
 api.add_router("/", wms_router)
+api.add_router("/", tms_router)

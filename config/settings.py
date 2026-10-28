@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     "apps.masterdata",
     "apps.oms",
     "apps.wms",
+    "apps.tms",
     "apps.scanner",
 ]
 
