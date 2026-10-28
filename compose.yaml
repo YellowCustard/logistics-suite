@@ -40,7 +40,9 @@ services:
       migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/readyz', timeout=3)"]
+      # Sends the public host name: on a server DJANGO_ALLOWED_HOSTS holds only $DOMAIN, so a probe addressed to
+      # 127.0.0.1 would get a 400 and the container would never become healthy.
+      test: ["CMD", "python", "-c", "import os, urllib.request; urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8000/api/v1/readyz', headers={'Host': os.environ.get('DOMAIN') or 'localhost'}), timeout=3)"]
       interval: 15s
       timeout: 5s
       retries: 3
