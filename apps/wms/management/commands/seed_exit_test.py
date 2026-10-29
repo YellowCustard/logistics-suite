@@ -30,6 +30,7 @@ SKU = "KAL-TEA-80"  # not lot tracked, so packing needs no lot scans
 QTY = Decimal(24)  # one case
 CARTON_KG = Decimal("4.8")
 MAX_STOPS = 10
+EXIT_STOPS = 5  # the M3 exit criterion
 COLUMNS = ("code", "name", "address", "latitude", "longitude")
 
 
@@ -88,6 +89,11 @@ def read_stops(path: str) -> list[StopRow]:
     return rows
 
 
+def new_batch() -> str:
+    """The client_ref prefix of a run: down to the second, so a quick rerun gets new references."""
+    return f"EXIT-{timezone.localtime():%m%d%H%M%S}"
+
+
 class Command(BaseCommand):
     help = (
         "Staging only: create one packed demo order per delivery address in --stops, the driver's login and the "
@@ -116,7 +122,7 @@ class Command(BaseCommand):
         first, _, last = driver_name.strip().partition(" ")
         if not first or not last.strip():
             raise CommandError('--driver-name needs a first and a last name, e.g. "Sipho Dlamini".')
-        batch = f"EXIT-{timezone.localtime():%m%d%H%M}"
+        batch = new_batch()
 
         try:
             with transaction.atomic():
@@ -145,6 +151,8 @@ class Command(BaseCommand):
 
         out = self.stdout
         out.write(self.style.SUCCESS(f"Batch {batch}: {len(orders)} orders picked and packed at {SITE_CODE}."))
+        if len(orders) != EXIT_STOPS:
+            out.write(self.style.WARNING(f"The exit test needs {EXIT_STOPS} stops; this batch has {len(orders)}."))
         for n, (row, order, sscc) in enumerate(zip(rows, orders, ssccs, strict=True), start=1):
             out.write(f"  {n}. {order.number}  {batch}-{n}  {row.code} {row.name}  carton {sscc}")
         out.write(f"Vehicle {truck.registration}.")
@@ -154,7 +162,7 @@ class Command(BaseCommand):
             out.write(f"Driver login {driver_email.strip().lower()} already existed; its password is unchanged.")
         out.write("Next, plan the trip:")
         out.write(
-            f'  manage.py exit_test_trip plan --batch {batch} --vehicle "{truck.registration}" '
+            f'  manage.py exit_test_trip plan --not-production --batch {batch} --vehicle "{truck.registration}" '
             f"--driver-email {driver_email.strip().lower()}"
         )
 
