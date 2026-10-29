@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "openapi": "cd .. && DJANGO_DEBUG=1 uv run python manage.py shell --no-imports -c \"import json; from config.api import api; print(json.dumps(api.get_openapi_schema(), indent=1, sort_keys=True))\" > portal/openapi.json",
-    "api-types": "npm run openapi && openapi-typescript openapi.json -o src/api/schema.d.ts"
+    "api-types": "npm run openapi && openapi-typescript openapi.json -o src/api/schema.d.ts",
+    "admin-css": "tailwindcss -i admin-ui/nq-admin.css -o ../apps/platform/static/nq-admin/nq-admin.css --minify"
   },
   "dependencies": {
     "@tanstack/react-query": "5.104.2",
@@ -18,6 +19,7 @@
     "react-router": "8.4.0"
   },
   "devDependencies": {
+    "@tailwindcss/cli": "4.3.3",
     "@testing-library/jest-dom": "7.0.1",
     "@testing-library/react": "16.3.3",
     "@testing-library/user-event": "14.6.8",
@@ -26,6 +28,7 @@
     "@vitejs/plugin-react": "6.1.2",
     "happy-dom": "21.0.1",
     "openapi-typescript": "7.13.0",
+    "tailwindcss": "4.3.3",
     "typescript": "5.9.3",
     "vite": "8.3.4",
     "vitest": "5.0.4"

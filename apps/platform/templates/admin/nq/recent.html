@@ -1,0 +1,22 @@
+{% load i18n nq_admin %}
+{% nq_recent as entries %}
+{% if entries is not None %}
+<section class="min-w-0 rounded-xl border border-line bg-surface p-4 xl:col-start-2 xl:row-start-2 xl:self-start" aria-labelledby="nq-recent">
+  <h2 id="nq-recent" class="text-base font-semibold text-fg">{% translate 'Recent activity' %}</h2>
+  {% if entries %}
+  <ul class="mt-2 divide-y divide-line" role="list">
+    {% for entry in entries %}
+    <li class="flex items-start justify-between gap-3 py-2.5">
+      <span class="min-w-0">
+        <span class="block truncate text-sm font-medium text-fg">{{ entry.entity_type }} {{ entry.entity_id|truncatechars:24 }}</span>
+        <span class="block truncate text-xs text-muted">{{ entry.actor_label|default:entry.actor_kind }} · <span class="font-mono">{{ entry.action }}</span></span>
+      </span>
+      <time class="shrink-0 text-xs tabular-nums text-muted" datetime="{{ entry.occurred_at|date:'c' }}">{% blocktranslate with age=entry.occurred_at|timesince %}{{ age }} ago{% endblocktranslate %}</time>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="mt-2 text-sm text-muted">{% translate 'Nothing recorded yet.' %}</p>
+  {% endif %}
+</section>
+{% endif %}

@@ -1,0 +1,356 @@
+/* Source for apps/platform/static/nq-admin/nq-admin.css (Tailwind CSS v4).
+   Build: `npm run admin-css` in portal/ (here, so tailwindcss resolves from portal/node_modules). The output is committed; CI rebuilds it and fails on drift.
+   The layer order (properties, django, theme, base, nq-base, components, utilities) is fixed first by django-layer.css. */
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities) source(none); /* no preflight: Django's base.css is the reset */
+
+@source "../../apps/platform/templates/admin";
+@source "../../apps/platform/templatetags";
+@source "../../apps/platform/static/nq-admin/nq-admin.js";
+
+@theme inline {
+  --color-bg: var(--nq-bg);
+  --color-side: var(--nq-side);
+  --color-surface: var(--nq-surface);
+  --color-hover: var(--nq-hover);
+  --color-line: var(--nq-line);
+  --color-line-strong: var(--nq-line-strong);
+  --color-fg: var(--nq-fg);
+  --color-muted: var(--nq-muted);
+  --color-accent: var(--nq-accent);
+  --color-accent-fg: var(--nq-accent-fg);
+  --color-pill: var(--nq-pill);
+  --color-pill-fg: var(--nq-pill-fg);
+  --color-teq: var(--nq-teq);
+  --font-display: var(--nq-font-display);
+  --font-mono: var(--nq-font-label);
+}
+
+@layer nq-base {
+  /* The --nq-* colour tokens live in brand/admin.css (unlayered), shared with the stock admin pages and login. */
+  :root {
+    --nq-sidebar-w: 16rem;
+  }
+
+  /* Resets only inside our own components, so Django's change lists and forms keep their stock rules. */
+  .nq-ui,
+  .nq-ui *,
+  .nq-ui ::before,
+  .nq-ui ::after {
+    box-sizing: border-box; /* Tailwind sizes assume it; Django's pages stay content-box */
+  }
+  .nq-ui :where(ul, ol) {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .nq-ui :where(li) {
+    list-style: none;
+    padding: 0;
+  }
+  .nq-ui :where(h1, h2, h3, p) {
+    margin: 0;
+    padding: 0;
+    font-size: inherit;
+    font-weight: inherit;
+    color: inherit;
+    background: none;
+    text-transform: none;
+    letter-spacing: normal;
+  }
+  .nq-ui :where(button) {
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+  }
+  .nq-ui :where(a:link, a:visited) {
+    color: inherit;
+    text-decoration: none;
+  }
+  .nq-ui :where(svg) {
+    flex: none;
+  }
+
+  /* Zero misclicks: one visible focus ring for every focusable element on every admin page. */
+  .nq :focus-visible {
+    outline: 2px solid var(--nq-focus);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  .nq-nav {
+    position: relative;
+  }
+  .nq-nav[data-current]::before {
+    content: "";
+    position: absolute;
+    left: 4px;
+    top: 8px;
+    bottom: 8px;
+    width: 3px;
+    border-radius: 3px;
+    background: var(--nq-accent);
+  }
+  .nq-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    min-height: 24px;
+    padding: 0 10px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1.2;
+    background: var(--nq-hover);
+    color: var(--nq-muted);
+  }
+  .nq-chip[data-tone="warning"] {
+    background: var(--nq-warn-bg);
+    color: var(--nq-warn);
+  }
+  .nq-chip[data-tone="critical"] {
+    background: var(--nq-crit-bg);
+    color: var(--nq-crit);
+  }
+  .nq-avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 999px;
+    background: var(--nq-pill);
+    color: var(--nq-pill-fg);
+    font-size: 0.8125rem;
+    font-weight: 700;
+  }
+  .nq-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 48px;
+    padding: 0 12px;
+    border-radius: 8px;
+    font-size: 0.9375rem;
+    font-weight: 500;
+    text-align: left;
+    color: var(--nq-fg);
+    transition: background-color 150ms ease-in-out;
+  }
+  .nq-menu-item:hover {
+    background: var(--nq-hover);
+  }
+  .nq-menu-item:active {
+    background: var(--nq-pill);
+    color: var(--nq-pill-fg);
+  }
+  .nq-pal-group {
+    padding: 12px 12px 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--nq-muted);
+  }
+  .nq-pal-opt {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 48px;
+    padding: 0 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    color: var(--nq-fg);
+    font-size: 0.9375rem;
+    transition: background-color 150ms ease-in-out;
+  }
+  .nq-pal-opt:hover {
+    background: var(--nq-hover);
+  }
+  .nq-pal-opt[aria-selected="true"] {
+    background: var(--nq-pill);
+    color: var(--nq-pill-fg);
+  }
+  .nq-pal-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .nq-pal-hint {
+    margin-left: auto;
+    font-size: 0.75rem;
+    color: var(--nq-muted);
+  }
+  .nq-pal-opt[aria-selected="true"] .nq-pal-hint {
+    color: var(--nq-pill-fg);
+  }
+  @media (min-width: 64rem) {
+    .nq-menu .nq-menu-item,
+    .nq-pal-opt {
+      min-height: 40px;
+      font-size: 0.875rem;
+    }
+  }
+
+  /* nprogress-style bar: creeps to 80 % while the next page loads, then completes and fades. */
+  .nq-progress {
+    position: fixed;
+    inset: 0 0 auto;
+    height: 3px;
+    z-index: 60;
+    background: var(--nq-focus);
+    transform-origin: 0 50%;
+    transform: scaleX(0);
+    opacity: 0;
+    pointer-events: none;
+    transition:
+      transform 150ms ease-in-out,
+      opacity 150ms ease-in-out;
+  }
+  .nq-progress[data-state="loading"] {
+    opacity: 1;
+    transform: scaleX(0.8);
+    transition:
+      transform 8s cubic-bezier(0.1, 0.6, 0.2, 1),
+      opacity 150ms ease-in-out;
+  }
+  .nq-progress[data-state="done"] {
+    opacity: 0;
+    transform: scaleX(1);
+    transition:
+      transform 150ms ease-in-out,
+      opacity 300ms ease-in-out 150ms;
+  }
+  [aria-busy="true"] {
+    cursor: progress;
+  }
+  button[aria-busy="true"]::after {
+    content: "";
+    display: inline-block;
+    inline-size: 1em;
+    block-size: 1em;
+    margin-inline-start: 0.5em;
+    vertical-align: -0.15em;
+    border: 2px solid currentColor;
+    border-inline-end-color: transparent;
+    border-radius: 999px;
+    animation: nq-spin 700ms linear infinite;
+  }
+  @keyframes nq-spin {
+    to {
+      transform: rotate(1turn);
+    }
+  }
+
+  /* Dialog motion. @starting-style is progressive: older browsers just show the dialog. */
+  .nq-drawer,
+  .nq-palette {
+    transition:
+      transform 150ms ease-in-out,
+      opacity 150ms ease-in-out,
+      overlay 150ms ease-in-out allow-discrete,
+      display 150ms ease-in-out allow-discrete;
+  }
+  .nq-drawer {
+    transform: translateX(-100%);
+  }
+  .nq-drawer[open] {
+    transform: none;
+  }
+  @starting-style {
+    .nq-drawer[open] {
+      transform: translateX(-100%);
+    }
+  }
+  .nq-palette {
+    opacity: 0;
+  }
+  .nq-palette[open] {
+    opacity: 1;
+  }
+  @starting-style {
+    .nq-palette[open] {
+      opacity: 0;
+    }
+  }
+  .nq-drawer::backdrop,
+  .nq-palette::backdrop {
+    background: rgb(3 6 14 / 0.6);
+  }
+}
+
+/* Never use the bare "hidden" class in admin templates: Django's base.css has .hidden { display: none !important },
+   and an !important rule in a lower layer beats every later layer, so "hidden lg:flex" would never show. Use max-lg:hidden. */
+
+/* Unlayered on purpose: these state rules must beat utilities (inline-flex) and Django's unlayered responsive.css. */
+[data-nq-sidebar="collapsed"] {
+  --nq-sidebar-w: 4.5rem;
+}
+[data-nq-sidebar="collapsed"] #nq-sidebar .nq-label,
+[data-nq-sidebar="collapsed"] #nq-sidebar .nq-sub {
+  display: none;
+}
+[data-nq-sidebar="collapsed"] #nq-sidebar summary,
+[data-nq-sidebar="collapsed"] #nq-sidebar .nq-nav {
+  justify-content: center;
+  padding-inline: 0;
+}
+.nq-rail-only {
+  display: none;
+}
+[data-nq-sidebar="collapsed"] .nq-rail-only {
+  display: inline-flex;
+}
+.nq #container {
+  min-width: 0;
+  box-sizing: border-box; /* stock width: 100% plus our sidebar padding would overflow */
+}
+.nq .theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: 2.5rem;
+  block-size: 2.5rem;
+  margin: 0;
+  border-radius: 0.375rem;
+  color: var(--nq-muted);
+  transition: background-color 150ms ease-in-out;
+}
+.nq .theme-toggle:hover {
+  background: var(--nq-hover);
+}
+@media (min-width: 64rem) {
+  .nq #container {
+    padding-left: var(--nq-sidebar-w);
+    transition: padding-left 150ms ease-in-out;
+  }
+}
+@media (max-width: 63.999rem) {
+  .nq #container {
+    padding-bottom: calc(3.5rem + env(safe-area-inset-bottom));
+  }
+  .nq #nq-drawer .theme-toggle {
+    inline-size: 3rem;
+    block-size: 3rem;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .nq *,
+  .nq *::before,
+  .nq *::after,
+  .nq-drawer,
+  .nq-palette,
+  .nq-progress {
+    transition-duration: 0ms !important;
+    animation: none !important;
+  }
+  .nq-progress[data-state="loading"] {
+    transform: scaleX(1);
+  }
+}

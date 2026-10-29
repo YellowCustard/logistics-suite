@@ -1,0 +1,22 @@
+{% load i18n nq_admin %}
+{# Shared by the desktop sidebar (dense) and the phone drawer (48 px rows). No ids inside: it is included twice. #}
+<a href="{% url 'admin:index' %}"{% if nav.home %} aria-current="page" data-current{% endif %}
+   class="nq-nav flex {% if dense %}min-h-10{% else %}min-h-12{% endif %} items-center gap-3 rounded-lg px-3 text-sm font-semibold text-fg transition-colors duration-150 ease-in-out hover:bg-hover data-[current]:bg-pill data-[current]:text-pill-fg">
+  {% nq_icon "home" "size-5 shrink-0" %}<span class="nq-label">{% translate 'Dashboard' %}</span>
+</a>
+{% for app in nav.apps %}
+<details class="group/acc mt-1" data-nq-section="{{ app.app_label }}"{% if app.open %} open{% endif %}>
+  <summary title="{{ app.name }}"
+           class="flex {% if dense %}min-h-10{% else %}min-h-12{% endif %} cursor-pointer list-none items-center gap-3 rounded-lg px-3 text-sm font-semibold text-fg transition-colors duration-150 ease-in-out hover:bg-hover [&::-webkit-details-marker]:hidden">
+    <span class="shrink-0 text-muted">{% nq_icon app.icon %}</span>
+    <span class="nq-label truncate">{{ app.name }}</span>
+    <span class="nq-label ml-auto text-muted transition-transform duration-150 ease-in-out group-open/acc:rotate-180">{% nq_icon "chevron-down" "size-4" %}</span>
+  </summary>
+  <ul class="nq-sub mb-2 mt-0.5 space-y-0.5 pl-6" role="list">
+    {% for model in app.models %}
+    <li><a href="{{ model.admin_url }}"{% if model.current %} aria-current="{{ model.current }}" data-current{% endif %}
+           class="nq-nav flex {% if dense %}min-h-9{% else %}min-h-12{% endif %} items-center rounded-md px-3 text-sm text-muted transition-colors duration-150 ease-in-out hover:bg-hover hover:text-fg data-[current]:bg-pill data-[current]:font-semibold data-[current]:text-pill-fg"><span class="truncate">{{ model.name }}</span></a></li>
+    {% endfor %}
+  </ul>
+</details>
+{% endfor %}

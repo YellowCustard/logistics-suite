@@ -3,11 +3,23 @@
 
 {% block title %}{% if subtitle %}{{ subtitle }} | {% endif %}{{ title }} | {{ site_title|default:_('Django site admin') }}{% endblock %}
 
+{# Stock base.css is re-imported into a low cascade layer, so Tailwind utilities beat its element rules (a:link, ul li, h2). #}
+{% block stylesheet %}{% static "nq-admin/django-layer.css" %}{% endblock %}
+
 {% block extrastyle %}{{ block.super }}
 <link rel="icon" href="{% static 'brand/favicon.svg' %}" type="image/svg+xml">
 <link rel="stylesheet" href="{% static 'brand/tokens.css' %}">
 <link rel="stylesheet" href="{% static 'brand/admin.css' %}">
+<link rel="stylesheet" href="{% static 'nq-admin/nq-admin.css' %}">
+{# early.js applies the stored sidebar width before first paint; nq-admin.js wires everything else. #}
+<script src="{% static 'nq-admin/early.js' %}"></script>
+<script src="{% static 'nq-admin/nq-admin.js' %}" defer></script>
 {% endblock %}
+
+{# The shell (sidebar, top bar, bottom bar) only exists for signed-in staff outside popups. #}
+{% block bodyclass %}{{ block.super }}{% if has_permission and not is_popup %} nq{% endif %}{% endblock %}
+
+{% block header %}{% if has_permission %}{% include "admin/nq/shell.html" %}{% else %}{{ block.super }}{% endif %}{% endblock %}
 
 {% block branding %}
 <div id="site-name"><a href="{% url 'admin:index' %}"><img src="{% static 'brand/mark-simple.svg' %}" alt="" width="28" height="28">{{ site_header|default:_('Django administration') }}</a></div>
