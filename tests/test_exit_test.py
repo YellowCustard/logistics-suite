@@ -39,7 +39,7 @@ def seeded(tmp_path, settings):
     args = ["--stops", str(stops), "--driver-email", "Sipho@Example.com", "--driver-name", "Sipho Dlamini"]
     call_command("seed_exit_test", "--not-production", *args, "--vehicle", "nd 123-456", stdout=out)
     text = out.getvalue()
-    return {"batch": re.search(r"Batch (EXIT-\d{8})", text).group(1), "out": text, "stops": stops}
+    return {"batch": re.search(r"Batch (EXIT-\d{10})", text).group(1), "out": text, "stops": stops}
 
 
 def _run(*args) -> str:
@@ -98,7 +98,7 @@ def test_plan_then_report_a_trip_driven_with_a_dropped_signal(seeded):
     plan = ["plan", "--batch", batch, "--vehicle", "ND 123-456", "--driver-email", "sipho@example.com"]
     with pytest.raises(CommandError, match="--not-production"):
         _run(*plan)
-    with pytest.raises(CommandError, match="EXIT-10281930"):
+    with pytest.raises(CommandError, match="EXIT-1028193005"):
         _run("plan", "--not-production", "--batch", "10281930", "--vehicle", "X", "--driver-email", "x@example.com")
     planned = _run(*plan[:2], f"{batch}-3", *plan[3:], "--not-production")  # an order reference names its batch
     trip = Trip.objects.get()
@@ -143,6 +143,18 @@ def test_plan_then_report_a_trip_driven_with_a_dropped_signal(seeded):
     passed = _run("report", trip.number)
     assert "PASS (server side): 5 stops done, 2 POD(s) captured offline" in passed
     assert passed.count("synced late") == 2 and "FAIL" not in passed
+
+
+def test_warns_when_the_batch_is_not_five_stops(seeded, monkeypatch):
+    # A different batch reference from the fixture's, even if both runs fall in the same second.
+    monkeypatch.setattr("apps.wms.management.commands.seed_exit_test.new_batch", lambda: "EXIT-0101000000")
+    two = seeded["stops"].with_name("two.csv")
+    two.write_text("\n".join(STOPS.splitlines()[:3]) + "\n")
+    out = StringIO()
+    args = ["--stops", str(two), "--driver-email", "sipho@example.com", "--driver-name", "Sipho Dlamini"]
+    call_command("seed_exit_test", "--not-production", *args, "--vehicle", "ND 123-456", stdout=out)
+    assert "needs 5 stops; this batch has 2" in out.getvalue()
+    assert "needs 5 stops" not in seeded["out"]
 
 
 def test_stops_can_be_piped_in(monkeypatch):

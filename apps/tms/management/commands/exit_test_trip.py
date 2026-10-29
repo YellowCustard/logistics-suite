@@ -23,8 +23,9 @@ from apps.tms.models import (
     TripStatus,
 )
 
-# A batch like EXIT-10281930; an order reference from it (EXIT-10281930-2) names the same batch.
-BATCH = re.compile(r"^(EXIT-\d{8})(?:-\d+)?$")
+# A batch like EXIT-1028193005 (EXIT-10281930 before seconds were added); an order reference from it
+# (EXIT-1028193005-2) names the same batch.
+BATCH = re.compile(r"^(EXIT-\d{8}(?:\d{2})?)(?:-\d+)?$")
 # A POD captured this long before the server got it was recorded offline and synced later.
 OFFLINE_LAG = timedelta(minutes=2)
 # Phone GPS indoors is poor; further than this from the address is worth a look, not a failure.
@@ -75,7 +76,7 @@ class Command(BaseCommand):
         batch = batch.strip().upper()
         match = BATCH.match(batch)
         if match is None:
-            raise CommandError("--batch is the EXIT-… reference seed_exit_test printed, e.g. EXIT-10281930.")
+            raise CommandError("--batch is the EXIT-… reference seed_exit_test printed, e.g. EXIT-1028193005.")
         batch = match.group(1)
         shipments = sorted(
             Shipment.objects.filter(client_ref__startswith=f"{batch}-").select_related("ship_to"),

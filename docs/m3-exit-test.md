@@ -61,14 +61,14 @@ no ETA and the driver taps **Arrived** at each stop.
      --driver-email driver.one@nuronteq.test --driver-name "First Last" --vehicle "ABC 123 GP" < ~/stops.csv
    ```
 
-   It prints the batch (for example `EXIT-11031400`), the five orders and their carton numbers (SSCCs), and the
+   It prints the batch (for example `EXIT-1103140005`), the five orders and their carton numbers (SSCCs), and the
    driver's password **once**. Give the password to the driver in person. Don't post it in a chat. The command
    ends with the next command to run.
 
 4. **Plan the trip** with the printed command:
 
    ```bash
-   deploy/ops.sh manage exit_test_trip plan --not-production --batch EXIT-11031400 \
+   deploy/ops.sh manage exit_test_trip plan --not-production --batch EXIT-1103140005 \
      --vehicle "ABC 123 GP" --driver-email driver.one@nuronteq.test
    ```
 
@@ -129,7 +129,7 @@ trip, and that is outside this test.
    - **Tracking**: open each of the 5 shipments. Each one is *Delivered*, with the recipient, the signature and the
      photos, and downloads work. The signed times of stops 3 and 4 are the times at the stop, before you switched
      airplane mode off.
-   - **Documents**: search the batch (for example `EXIT-11031400`). Every signature and photo is listed and opens.
+   - **Documents**: search the batch (for example `EXIT-1103140005`). Every signature and photo is listed and opens.
    - **Orders**: all five orders of the batch are *Delivered*. Open one: its timeline shows the dispatch and the
      delivery.
 
