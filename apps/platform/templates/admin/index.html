@@ -1,0 +1,46 @@
+{% extends "admin/base_site.html" %}
+{% load i18n nq_admin %}
+{# app_index.html extends this template, so /admin/wms/ renders the same card for one app (app_label is set there). #}
+
+{% block coltype %}colM{% endblock %}
+{% block content_title %}{% endblock %}
+{# Django's "Recent actions" only sees admin edits; Recent activity reads AuditEntry instead. #}
+{% block sidebar %}{% endblock %}
+
+{% block content %}
+<div class="nq-ui">
+  <h1 class="font-display text-2xl font-semibold text-fg lg:text-3xl">{% if app_label %}{{ app_list.0.name }}{% else %}{% translate 'Dashboard' %}{% endif %}</h1>
+  <p class="mt-1 text-sm text-muted">{% translate 'Live counts as of' %} {% now "H:i" %}</p>
+
+  {% if not app_label %}
+    {% nq_kpis as kpis %}
+    {% if kpis %}
+    <ul class="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4" role="list">
+      {% for kpi in kpis %}
+      <li>
+        <a href="{{ kpi.href }}" class="group flex h-full min-h-[7.25rem] flex-col justify-between gap-2 rounded-xl border border-line bg-surface p-4 transition-colors duration-150 ease-in-out hover:border-line-strong hover:bg-hover active:bg-pill lg:min-h-[8.5rem] lg:p-5">
+          <span class="flex items-start justify-between gap-2 text-sm font-medium leading-snug text-muted">{{ kpi.label }}<span class="max-lg:hidden lg:inline">{% nq_icon kpi.icon %}</span></span>
+          <span class="font-display text-3xl font-semibold leading-none tabular-nums text-fg lg:text-4xl" data-nq-kpi="{{ kpi.label }}">{{ kpi.value }}</span>
+          {% if kpi.detail %}<span class="nq-chip self-start" data-tone="{{ kpi.tone }}">{% nq_tone_icon kpi.tone %}{{ kpi.detail }}</span>{% endif %}
+        </a>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  {% endif %}
+
+  <div class="{% if app_label %}mt-6{% else %}mt-6 grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_20rem] xl:grid-rows-[auto_1fr]{% endif %}">
+    {% if not app_label %}{% include "admin/nq/attention.html" %}{% endif %}
+    <section class="min-w-0 xl:col-start-1 xl:row-span-2 xl:row-start-1" aria-label="{% translate 'Data' %}">
+      {% if app_list %}
+      <div class="{% if app_label %}max-w-3xl{% else %}columns-1 gap-4 lg:columns-2{% endif %}">
+        {% for app in app_list|nq_ordered %}{% include "admin/nq/app_card.html" %}{% endfor %}
+      </div>
+      {% else %}
+      <p class="text-sm text-muted">{% translate 'You don’t have permission to view or edit anything.' %}</p>
+      {% endif %}
+    </section>
+    {% if not app_label %}{% include "admin/nq/recent.html" %}{% endif %}
+  </div>
+</div>
+{% endblock %}

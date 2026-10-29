@@ -1,81 +1,148 @@
-/* Nuronteq skin for the Django admin: only overrides admin/css/base.css and dark_mode.css variables.
-   Loaded after both, so dark values are repeated for the media query and the theme toggle. */
+/* Nuronteq skin for the Django admin.
+   The --nq-* semantic tokens below are the only values that change per theme; every Django variable maps to one of them
+   once, in a single :root block. That block is unlayered and loaded after dark_mode.css, so it wins in every theme,
+   including "light" on a dark OS (Django's own html[data-theme="light"] reset lives in base.css, which
+   nq-admin/django-layer.css moves into a low cascade layer). Every text pair is 7:1 or better (WCAG AAA). */
 
 :root {
-  --primary: var(--nq-indigo);
-  --secondary: var(--nq-ink);
-  --accent: var(--nq-cyan);
-  --primary-fg: #fff;
-
-  --body-fg: var(--nq-ink);
-  --body-quiet-color: var(--nq-slate);
-  --body-medium-color: #2b3250;
-
-  --header-color: var(--nq-slate-on-ink);
-  --header-branding-color: #fff;
-  --header-bg: var(--nq-ink);
-
-  --breadcrumbs-fg: var(--nq-slate-on-ink);
-  --breadcrumbs-link-fg: #fff;
-  --breadcrumbs-bg: #1a2140;
-
-  --link-fg: var(--nq-indigo);
-  --link-hover-color: #3c3cd6;
-  --link-selected-fg: var(--nq-indigo);
-
-  --hairline-color: #e3e7f3;
-  --border-color: #d6dbea;
-  --darkened-bg: var(--nq-mist-light);
-  --selected-bg: var(--nq-mist);
-  --selected-row: var(--nq-mist);
-
-  --button-bg: var(--nq-slate);
-  --button-hover-bg: var(--nq-ink);
-  --default-button-bg: var(--nq-indigo);
-  --default-button-hover-bg: #3c3cd6;
-
-  --font-family-primary: var(--nq-font-text);
-  --font-family-monospace: var(--nq-font-label);
+  color-scheme: light;
+  --nq-bg: #f6f7fc;
+  --nq-side: #ffffff;
+  --nq-surface: #ffffff;
+  --nq-hover: #eef1fa;
+  --nq-line: #dde2f0;
+  --nq-line-strong: #8a93b0;
+  --nq-fg: #0b1020;
+  --nq-muted: #3f4766;
+  --nq-accent: #5b5bff; /* fills and the active-route bar only: never text */
+  --nq-accent-fg: #3434c0;
+  --nq-accent-hover: #24248f;
+  --nq-pill: #e3e5ff;
+  --nq-pill-fg: #2e2eb0;
+  --nq-teq: #5b5bff;
+  --nq-focus: #3434c0;
+  --nq-crit: #881337;
+  --nq-crit-bg: #ffe4e8;
+  --nq-warn: #7c2d12;
+  --nq-warn-bg: #fef3c7;
+  --nq-ok: #064e3b;
+  --nq-ok-bg: #d1fae5;
+  --nq-btn: #3f4766;
+  --nq-btn-hover: #0b1020;
+  --nq-btn-default: #3434c0;
+  --nq-btn-default-hover: #24248f;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --primary: #262c66;
-    --body-fg: #e6e9f5;
-    --body-bg: var(--nq-ink);
-    --body-quiet-color: var(--nq-slate-on-ink);
-    --body-medium-color: #c9cee2;
-    --breadcrumbs-bg: #262c66;
-    --link-fg: var(--nq-indigo-on-ink);
-    --link-hover-color: #9c9cff;
-    --link-selected-fg: var(--nq-indigo-on-ink);
-    --hairline-color: #1c2340;
-    --border-color: #2a3252;
-    --darkened-bg: #121933;
-    --selected-bg: #161d3a;
-    --selected-row: #1d2453;
-    --button-bg: #2a3252;
-    --button-hover-bg: #3a4368;
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --nq-bg: #0b0f19;
+    --nq-side: #121a2b;
+    --nq-surface: #1e293b;
+    --nq-hover: #273449;
+    --nq-line: #334155;
+    --nq-line-strong: #64748b;
+    --nq-fg: #f1f5f9;
+    --nq-muted: #cbd5e1;
+    --nq-accent: #6e6eff;
+    --nq-accent-fg: #c4c4ff;
+    --nq-accent-hover: #e4e4ff;
+    --nq-pill: #2a2d6e;
+    --nq-pill-fg: #e4e4ff;
+    --nq-teq: #2ee6d6;
+    --nq-focus: #2ee6d6;
+    --nq-crit: #fca5a5;
+    --nq-crit-bg: #3b1d2a;
+    --nq-warn: #fcd34d;
+    --nq-warn-bg: #3a2f12;
+    --nq-ok: #6ee7b7;
+    --nq-ok-bg: #0f3328;
+    --nq-btn: #334155;
+    --nq-btn-hover: #475569;
+    --nq-btn-default: #4040d0;
+    --nq-btn-default-hover: #3434c0;
   }
 }
 
-html[data-theme="dark"] {
-  --primary: #262c66;
-  --body-fg: #e6e9f5;
-  --body-bg: var(--nq-ink);
-  --body-quiet-color: var(--nq-slate-on-ink);
-  --body-medium-color: #c9cee2;
-  --breadcrumbs-bg: #262c66;
-  --link-fg: var(--nq-indigo-on-ink);
-  --link-hover-color: #9c9cff;
-  --link-selected-fg: var(--nq-indigo-on-ink);
-  --hairline-color: #1c2340;
-  --border-color: #2a3252;
-  --darkened-bg: #121933;
-  --selected-bg: #161d3a;
-  --selected-row: #1d2453;
-  --button-bg: #2a3252;
-  --button-hover-bg: #3a4368;
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --nq-bg: #0b0f19;
+  --nq-side: #121a2b;
+  --nq-surface: #1e293b;
+  --nq-hover: #273449;
+  --nq-line: #334155;
+  --nq-line-strong: #64748b;
+  --nq-fg: #f1f5f9;
+  --nq-muted: #cbd5e1;
+  --nq-accent: #6e6eff;
+  --nq-accent-fg: #c4c4ff;
+  --nq-accent-hover: #e4e4ff;
+  --nq-pill: #2a2d6e;
+  --nq-pill-fg: #e4e4ff;
+  --nq-teq: #2ee6d6;
+  --nq-focus: #2ee6d6;
+  --nq-crit: #fca5a5;
+  --nq-crit-bg: #3b1d2a;
+  --nq-warn: #fcd34d;
+  --nq-warn-bg: #3a2f12;
+  --nq-ok: #6ee7b7;
+  --nq-ok-bg: #0f3328;
+  --nq-btn: #334155;
+  --nq-btn-hover: #475569;
+  --nq-btn-default: #4040d0;
+  --nq-btn-default-hover: #3434c0;
+}
+
+/* Django's variables (base.css and dark_mode.css), each mapped once. */
+:root {
+  --primary: var(--nq-hover); /* module captions, selector headers */
+  --primary-fg: var(--nq-fg);
+  --secondary: var(--nq-pill);
+  --accent: var(--nq-teq);
+
+  --body-fg: var(--nq-fg);
+  --body-bg: var(--nq-bg);
+  --body-quiet-color: var(--nq-muted);
+  --body-medium-color: var(--nq-muted);
+  --body-loud-color: var(--nq-fg);
+
+  --header-color: var(--nq-muted);
+  --header-branding-color: var(--nq-fg);
+  --header-bg: var(--nq-side);
+  --header-link-color: var(--nq-fg);
+
+  --breadcrumbs-fg: var(--nq-muted);
+  --breadcrumbs-link-fg: var(--nq-accent-fg);
+  --breadcrumbs-bg: var(--nq-side);
+
+  --link-fg: var(--nq-accent-fg);
+  --link-hover-color: var(--nq-accent-hover);
+  --link-selected-fg: var(--nq-accent-fg);
+
+  --hairline-color: var(--nq-line);
+  --border-color: var(--nq-line);
+
+  --error-fg: var(--nq-crit);
+  --message-success-bg: var(--nq-ok-bg);
+  --message-warning-bg: var(--nq-warn-bg);
+  --message-error-bg: var(--nq-crit-bg);
+
+  --darkened-bg: var(--nq-hover);
+  --selected-bg: var(--nq-hover);
+  --selected-row: var(--nq-pill);
+
+  --button-fg: #fff;
+  --button-bg: var(--nq-btn);
+  --button-hover-bg: var(--nq-btn-hover);
+  --default-button-bg: var(--nq-btn-default);
+  --default-button-hover-bg: var(--nq-btn-default-hover);
+  --close-button-bg: var(--nq-btn);
+  --close-button-hover-bg: var(--nq-btn-hover);
+  --delete-button-bg: #a41515;
+  --delete-button-hover-bg: #861010;
+
+  --font-family-primary: var(--nq-font-text);
+  --font-family-monospace: var(--nq-font-label);
 }
 
 #site-name, #content h1 {
@@ -85,21 +152,27 @@ html[data-theme="dark"] {
 }
 
 #site-name a { display: inline-flex; align-items: center; gap: 10px; }
-#site-name a:link, #site-name a:visited { color: #fff; }
+#site-name a:link, #site-name a:visited { color: var(--header-branding-color); }
 #site-name img { flex: none; }
+#header { border-bottom: 1px solid var(--nq-line); }
 
-/* Stock captions use the header colour, which disappears into the Ink page in dark mode. */
-.module h2, .module caption, .inline-group h2 {
-  background: var(--primary);
-  font-family: var(--nq-font-label);
-  font-weight: 500;
-  letter-spacing: 0.1em;
-}
-#recent-actions-module h2 {
+/* Sentence-case, bold headers everywhere: no uppercase captions, table heads, filters or buttons.
+   The "body" prefix outranks changelists.css and forms.css, which load after this file on their own pages. */
+body .module h2, body .module caption, body .inline-group h2, body #changelist-filter h2 {
   font-family: var(--nq-font-display);
   font-weight: 600;
-  letter-spacing: -0.01em;
+  font-size: 0.9375rem;
+  letter-spacing: normal;
+  text-transform: none;
 }
+.module h2, .module caption, .inline-group h2 { background: var(--primary); color: var(--primary-fg); }
+body thead th, body .object-tools a:link, body .object-tools a:visited, body .submit-row input.default, #user-tools, h5 {
+  letter-spacing: normal;
+  text-transform: none;
+}
+thead th { font-weight: 600; }
 
 .login .submit-row input { background: var(--default-button-bg); }
 .login .submit-row input:hover { background: var(--default-button-hover-bg); }
+body.login { background: var(--nq-bg); }
+.login #container { background: var(--nq-surface); border: 1px solid var(--nq-line); border-radius: 12px; overflow: hidden; }

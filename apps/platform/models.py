@@ -146,6 +146,7 @@ class AuditEntry(models.Model):
             models.Index(fields=["actor_id", "occurred_at"], name="audit_actor_idx"),
         ]
         ordering = ["-occurred_at"]
+        verbose_name_plural = "audit entries"
 
     def __str__(self) -> str:
         return f"{self.action} {self.entity_type}:{self.entity_id}"
@@ -200,6 +201,7 @@ class EventDelivery(models.Model):
     class Meta:
         constraints = [models.UniqueConstraint(fields=["event", "consumer"], name="delivery_event_consumer_uq")]
         indexes = [models.Index(fields=["next_attempt_at"], name="delivery_pending_idx", condition=Q(status="pending"))]
+        verbose_name_plural = "event deliveries"
 
     def __str__(self) -> str:
         return f"{self.consumer} ← {self.event_id} ({self.status})"
@@ -422,6 +424,7 @@ class WebhookDelivery(models.Model):
         indexes = [
             models.Index(fields=["next_attempt_at"], name="webhook_due_idx", condition=Q(status="pending")),
         ]
+        verbose_name_plural = "webhook deliveries"
 
     def __str__(self) -> str:
         return f"{self.event_id} → {self.subscription_id} ({self.status})"

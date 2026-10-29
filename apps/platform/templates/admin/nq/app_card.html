@@ -1,0 +1,40 @@
+{% load i18n nq_admin %}
+{# One responsive card per app. Desktop: 40 px rows with icon actions. Phones: 56 px whole-row links plus a 48 px add button. #}
+<section class="mb-4 break-inside-avoid rounded-xl border border-line bg-surface p-4 lg:p-3" aria-labelledby="nq-app-{{ app.app_label }}">
+  <header class="flex flex-wrap items-center gap-x-3 gap-y-1 pb-2 lg:px-2">
+    <span class="inline-flex size-9 shrink-0 items-center justify-center rounded-lg bg-pill text-pill-fg" aria-hidden="true">{% nq_app_icon app.app_label %}</span>
+    <h2 id="nq-app-{{ app.app_label }}" class="text-base font-semibold text-fg">
+      <a href="{{ app.app_url }}" class="inline-flex min-h-12 items-center rounded-md hover:underline lg:min-h-0">{{ app.name }}</a>
+    </h2>
+    {% nq_chips app.app_label as chips %}
+    {% if chips %}
+    <ul class="flex basis-full flex-wrap gap-1.5 lg:ml-auto lg:basis-auto" role="list" aria-label="{% translate 'Status' %}">
+      {% for chip in chips %}<li class="nq-chip" data-tone="{{ chip.tone }}">{% nq_tone_icon chip.tone %}{{ chip.label }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+  </header>
+  <ul class="divide-y divide-line lg:divide-y-0" role="list">
+    {% for model in app.models %}{% if model.admin_url %}
+    <li class="flex items-center gap-2 py-1 lg:py-0">
+      <a href="{{ model.admin_url }}"
+         class="flex min-h-14 min-w-0 flex-1 items-center gap-3 rounded-lg px-3 text-base font-medium text-fg transition-colors duration-150 ease-in-out hover:bg-hover active:bg-pill lg:min-h-10 lg:text-sm">
+        <span class="truncate">{{ model.name }}</span>{% if model.view_only %}<span class="sr-only">, {% translate 'view only' %}</span>{% endif %}
+        {% nq_icon "chevron-right" "ml-auto size-5 shrink-0 text-muted lg:hidden" %}
+      </a>
+      {# Desktop icon actions. The view/edit icon repeats the name link, so keyboard and screen readers skip it. #}
+      <span class="max-lg:hidden shrink-0 items-center gap-1 pr-1 lg:flex">
+        <a href="{{ model.admin_url }}" tabindex="-1" aria-hidden="true" title="{% if model.view_only %}{% translate 'View' %}{% else %}{% translate 'Edit' %}{% endif %}"
+           class="inline-flex size-9 items-center justify-center rounded-md text-muted transition-colors duration-150 ease-in-out hover:bg-hover hover:text-fg active:bg-pill active:text-pill-fg">{% if model.view_only %}{% nq_icon "eye" "size-[18px]" %}{% else %}{% nq_icon "pencil" "size-[18px]" %}{% endif %}</a>
+        {% if model.add_url %}
+        <a href="{{ model.add_url }}" aria-label="{% translate 'Add' %} {{ model|nq_verbose_name }}" title="{% translate 'Add' %} {{ model|nq_verbose_name }}"
+           class="inline-flex size-9 items-center justify-center rounded-md text-accent-fg transition-colors duration-150 ease-in-out hover:bg-hover active:bg-pill">{% nq_icon "plus" "size-[18px]" %}</a>
+        {% else %}<span class="size-9" aria-hidden="true"></span>{% endif %}
+      </span>
+      {% if model.add_url %}
+      <a href="{{ model.add_url }}" aria-label="{% translate 'Add' %} {{ model|nq_verbose_name }}" data-nq-add-mobile
+         class="inline-flex size-12 shrink-0 items-center justify-center rounded-full border border-line-strong text-accent-fg transition-colors duration-150 ease-in-out hover:bg-hover active:bg-pill lg:hidden">{% nq_icon "plus" %}</a>
+      {% endif %}
+    </li>
+    {% endif %}{% endfor %}
+  </ul>
+</section>

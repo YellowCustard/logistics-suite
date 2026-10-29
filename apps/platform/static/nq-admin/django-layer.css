@@ -1,0 +1,5 @@
+/* Linked first, in place of Django's base.css ({% block stylesheet %} in admin/base_site.html).
+   It fixes the cascade-layer order for the whole admin page and moves the stock base.css into the lowest layer,
+   so the Tailwind utilities in nq-admin.css beat its element rules (a:link, ul li, h1, h2). */
+@layer properties, django, theme, base, nq-base, components, utilities;
+@import url("../admin/css/base.css") layer(django);

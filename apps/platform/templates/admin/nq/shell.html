@@ -1,0 +1,112 @@
+{% load i18n static nq_admin %}
+{% nq_nav request available_apps as nav %}
+<div id="nq-progress" class="nq-progress" aria-hidden="true"></div>
+
+{# Desktop: persistent sidebar, collapsible to a 72 px icon rail. #}
+<aside id="nq-sidebar" class="nq-ui fixed inset-y-0 left-0 z-30 max-lg:hidden w-[var(--nq-sidebar-w)] flex-col border-r border-line bg-side transition-[width] duration-150 ease-in-out lg:flex">
+  <div class="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3">
+    <a href="{% url 'admin:index' %}" class="flex min-w-0 items-center gap-2.5 rounded-md p-1">
+      <img src="{% static 'brand/mark-simple.svg' %}" alt="" width="28" height="28">
+      <span class="nq-label font-display text-lg font-semibold tracking-[-0.04em] text-fg">nuron<span class="text-teq">teq</span></span>
+      <span class="sr-only">{% translate 'Dashboard' %}</span>
+    </a>
+    <button type="button" data-nq-toggle-sidebar aria-controls="nq-sidebar" aria-expanded="true" aria-label="{% translate 'Collapse sidebar' %}"
+            class="nq-label ml-auto inline-flex size-9 items-center justify-center rounded-md text-muted transition-colors duration-150 ease-in-out hover:bg-hover hover:text-fg active:bg-pill">{% nq_icon "panel" %}</button>
+  </div>
+  <nav class="flex-1 overflow-y-auto px-2 py-3" aria-label="{% translate 'Admin sections' %}">
+    {% include "admin/nq/nav.html" with nav=nav dense=True %}
+  </nav>
+  <button type="button" data-nq-toggle-sidebar aria-controls="nq-sidebar" aria-expanded="false" aria-label="{% translate 'Expand sidebar' %}"
+          class="nq-rail-only mx-auto mb-3 size-10 items-center justify-center rounded-md text-muted transition-colors duration-150 ease-in-out hover:bg-hover hover:text-fg">{% nq_icon "panel" %}</button>
+</aside>
+
+{# Top bar: brand, search and account on phones; search field, View site, theme and account menu on desktop. #}
+<header class="nq-ui sticky top-0 z-20 flex h-14 items-center gap-1 border-b border-line bg-bg px-2 lg:gap-3 lg:px-6">
+  <a href="{% url 'admin:index' %}" class="inline-flex min-h-12 items-center gap-2 rounded-md px-2 lg:hidden">
+    <img src="{% static 'brand/mark-simple.svg' %}" alt="" width="26" height="26">
+    <span class="font-display text-lg font-semibold tracking-[-0.04em] text-fg">nuron<span class="text-teq">teq</span></span>
+    <span class="sr-only">{% translate 'Dashboard' %}</span>
+  </a>
+  <button type="button" data-nq-open="nq-palette" aria-haspopup="dialog"
+          class="max-lg:hidden h-10 w-full max-w-xl items-center gap-3 rounded-lg border border-line-strong bg-surface px-3 text-left text-sm text-muted transition-colors duration-150 ease-in-out hover:text-fg lg:flex">
+    {% nq_icon "search" "size-4 shrink-0" %}<span class="flex-1 truncate">{% translate 'Search models, actions or numbers like ORD-2026-000412' %}</span>
+    <kbd class="rounded border border-line px-1.5 font-mono text-xs" data-nq-shortcut>Ctrl K</kbd>
+  </button>
+  <span class="flex-1"></span>
+  {% if site_url %}
+  <a href="{{ site_url }}" class="max-lg:hidden min-h-10 items-center gap-2 rounded-md px-3 text-sm font-medium text-muted transition-colors duration-150 ease-in-out hover:bg-hover hover:text-fg lg:inline-flex">{% translate 'View site' %}{% nq_icon "external" "size-4" %}</a>
+  {% endif %}
+  <span class="max-lg:hidden lg:inline-flex">{% include "admin/color_theme_toggle.html" %}</span>
+  <button type="button" data-nq-open="nq-palette" aria-haspopup="dialog" aria-label="{% translate 'Search' %}"
+          class="inline-flex size-12 items-center justify-center rounded-full text-fg transition-colors duration-150 ease-in-out hover:bg-hover active:bg-pill lg:hidden">{% nq_icon "search" %}</button>
+  <button type="button" data-nq-open="nq-drawer" aria-haspopup="dialog" aria-label="{% translate 'Account and menu' %}"
+          class="inline-flex size-12 items-center justify-center rounded-full transition-colors duration-150 ease-in-out hover:bg-hover active:bg-pill lg:hidden"><span class="nq-avatar">{{ user|nq_initials }}</span></button>
+  <details class="nq-menu relative max-lg:hidden lg:block">
+    <summary class="inline-flex size-10 cursor-pointer list-none items-center justify-center rounded-full transition-colors duration-150 ease-in-out hover:bg-hover [&::-webkit-details-marker]:hidden" aria-label="{% translate 'Account' %}"><span class="nq-avatar">{{ user|nq_initials }}</span></summary>
+    <div class="absolute right-0 top-12 w-72 rounded-xl border border-line bg-surface p-2 shadow-2xl">
+      <div class="px-3 py-2">
+        <p class="truncate font-semibold text-fg">{{ user.full_name|default:user.get_username }}</p>
+        <p class="truncate text-sm text-muted" title="{{ user.email }}">{{ user.email }}</p>
+      </div>
+      {% if user.has_usable_password %}<a href="{% url 'admin:password_change' %}" class="nq-menu-item">{% translate 'Change password' %}</a>{% endif %}
+      <form method="post" action="{% url 'admin:logout' %}">{% csrf_token %}<button type="submit" class="nq-menu-item">{% translate 'Log out' %}</button></form>
+    </div>
+  </details>
+</header>
+
+{# Phones: sticky bottom bar. grid-flow-col keeps it even when a user lacks a section. #}
+<nav class="nq-ui fixed inset-x-0 bottom-0 z-20 grid grid-flow-col auto-cols-fr border-t border-line bg-side pb-[env(safe-area-inset-bottom)] lg:hidden" aria-label="{% translate 'Primary' %}">
+  {% for tab in nav.tabs %}
+  <a href="{{ tab.url }}"{% if tab.current %} aria-current="{{ tab.current }}" data-current{% endif %}
+     class="group flex min-h-14 flex-col items-center justify-center gap-0.5 text-xs font-medium text-muted transition-colors duration-150 ease-in-out active:bg-hover data-[current]:text-accent-fg">
+    <span class="inline-flex h-7 w-12 items-center justify-center rounded-full transition-colors duration-150 ease-in-out group-data-[current]:bg-pill group-data-[current]:text-pill-fg">{% nq_icon tab.icon %}</span>{{ tab.label }}
+  </a>
+  {% endfor %}
+  <button type="button" data-nq-open="nq-drawer" aria-haspopup="dialog"
+          class="flex min-h-14 flex-col items-center justify-center gap-0.5 text-xs font-medium text-muted transition-colors duration-150 ease-in-out active:bg-hover">
+    <span class="inline-flex h-7 w-12 items-center justify-center rounded-full">{% nq_icon "menu" %}</span>{% translate 'More' %}
+  </button>
+</nav>
+
+{# Phones: slide-over drawer with every section, the account and the theme. #}
+<dialog id="nq-drawer" class="nq-ui nq-drawer m-0 h-dvh max-h-none w-[min(20rem,88vw)] max-w-none border-0 bg-side p-0 text-fg" aria-label="{% translate 'Menu' %}">
+  <div class="flex h-full flex-col">
+    <div class="flex items-center gap-3 border-b border-line p-4">
+      <span class="nq-avatar size-10">{{ user|nq_initials }}</span>
+      <div class="min-w-0 flex-1">
+        <p class="truncate font-semibold">{{ user.full_name|default:user.get_username }}</p>
+        <p class="truncate text-sm text-muted" title="{{ user.email }}">{{ user.email }}</p>
+      </div>
+      <button type="button" data-nq-close aria-label="{% translate 'Close menu' %}"
+              class="inline-flex size-12 shrink-0 items-center justify-center rounded-full text-muted transition-colors duration-150 ease-in-out hover:bg-hover hover:text-fg">{% nq_icon "x" %}</button>
+    </div>
+    <nav class="flex-1 overflow-y-auto p-2" aria-label="{% translate 'All sections' %}">
+      {% include "admin/nq/nav.html" with nav=nav dense=False %}
+    </nav>
+    <div class="space-y-1 border-t border-line p-2">
+      <div class="flex min-h-12 items-center justify-between px-3"><span class="text-sm font-medium">{% translate 'Theme' %}</span>{% include "admin/color_theme_toggle.html" %}</div>
+      {% if site_url %}<a href="{{ site_url }}" class="nq-menu-item">{% nq_icon "external" %}{% translate 'View site' %}</a>{% endif %}
+      {% if user.has_usable_password %}<a href="{% url 'admin:password_change' %}" class="nq-menu-item">{% nq_icon "key" %}{% translate 'Change password' %}</a>{% endif %}
+      <form method="post" action="{% url 'admin:logout' %}">{% csrf_token %}<button type="submit" class="nq-menu-item">{% nq_icon "logout" %}{% translate 'Log out' %}</button></form>
+    </div>
+  </div>
+</dialog>
+
+{# Command palette: full screen on phones, centred panel on desktop. #}
+<dialog id="nq-palette" aria-label="{% translate 'Search the admin' %}"
+        class="nq-ui nq-palette m-0 h-dvh max-h-none w-full max-w-none border-0 bg-surface p-0 text-fg lg:mx-auto lg:mt-[12vh] lg:h-[min(32rem,76vh)] lg:max-w-xl lg:rounded-xl lg:border lg:border-line lg:shadow-2xl">
+  <div class="flex h-full flex-col">
+    <div class="flex h-14 shrink-0 items-center gap-2 border-b border-line pl-4 pr-1 focus-within:shadow-[inset_0_-2px_0_var(--nq-focus)] lg:pr-3">
+      {% nq_icon "search" "size-5 shrink-0 text-muted" %}
+      <input id="nq-palette-input" type="text" role="combobox" aria-expanded="true" aria-controls="nq-palette-list" aria-autocomplete="list"
+             autocomplete="off" spellcheck="false" placeholder="{% translate 'Search models, actions or numbers' %}"
+             class="h-full min-w-0 flex-1 border-0 bg-transparent text-base text-fg outline-none placeholder:text-muted">
+      <kbd class="max-lg:hidden rounded border border-line px-1.5 font-mono text-xs text-muted lg:inline">Esc</kbd>
+      <button type="button" data-nq-close aria-label="{% translate 'Close search' %}"
+              class="inline-flex size-12 items-center justify-center rounded-full text-muted transition-colors duration-150 ease-in-out hover:bg-hover lg:hidden">{% nq_icon "x" %}</button>
+    </div>
+    <ul id="nq-palette-list" role="listbox" aria-label="{% translate 'Results' %}" class="min-h-0 flex-1 overflow-y-auto p-2"></ul>
+    <p id="nq-palette-status" class="sr-only" aria-live="polite"></p>
+  </div>
+</dialog>
+{% nq_palette_data available_apps %}

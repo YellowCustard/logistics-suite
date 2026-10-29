@@ -82,6 +82,11 @@ jobs:
           npm run api-types
           git diff --exit-code -- src/api/schema.d.ts || {
             echo "::error::portal/src/api/schema.d.ts is stale; run 'npm run api-types' in portal/ and commit it"; exit 1; }
+      - name: Admin CSS matches its sources
+        run: |
+          npm run admin-css
+          git diff --exit-code -- ../apps/platform/static/nq-admin/nq-admin.css || {
+            echo "::error::apps/platform/static/nq-admin/nq-admin.css is stale; run 'npm run admin-css' in portal/ and commit it"; exit 1; }
       - name: Tests
         run: npm test
       - name: Build (type-checks first)

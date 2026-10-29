@@ -1,6 +1,8 @@
 from django.contrib import admin
 
 from .models import (
+    CycleCount,
+    CycleCountLine,
     InventoryBalance,
     InventoryMovement,
     Location,
@@ -84,3 +86,25 @@ class PickWaveAdmin(ReadOnlyAdmin):
 class PickTaskAdmin(ReadOnlyAdmin):
     list_display = ["wave", "item", "from_location", "qty", "qty_picked", "status", "short_reason"]
     list_filter = ["status", "site"]
+
+
+class CycleCountLineInline(admin.TabularInline):
+    model = CycleCountLine
+    extra = 0
+    fields = ["location", "client", "item", "lot", "expiry", "stock_status", "system_qty", "counted_qty", "counted_by"]
+    readonly_fields = fields
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(CycleCount)
+class CycleCountAdmin(ReadOnlyAdmin):
+    list_display = ["number", "site", "status", "submitted_at", "decided_at"]
+    list_filter = ["status", "site"]
+    search_fields = ["number"]
+    exclude = ["locations"]
+    inlines = [CycleCountLineInline]

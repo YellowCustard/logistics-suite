@@ -11,6 +11,7 @@ from .models import (
     ExceptionCase,
     OutboxEvent,
     RoleGrant,
+    SyncCommand,
     User,
     WebhookDelivery,
     WebhookSubscription,
@@ -129,3 +130,11 @@ class WebhookDeliveryAdmin(ReadOnlyAdmin):
 
     def has_change_permission(self, request, obj=None):  # needed for actions
         return request.user.is_superuser
+
+
+@admin.register(SyncCommand)
+class SyncCommandAdmin(ReadOnlyAdmin):
+    list_display = ["received_at", "type", "status", "actor", "device_id", "recorded_at"]
+    list_filter = ["status", "type"]
+    search_fields = ["id", "actor", "device_id"]
+    date_hierarchy = "received_at"

@@ -7,6 +7,7 @@ class PlatformConfig(AppConfig):
     verbose_name = "Platform"
 
     def ready(self) -> None:
-        from . import audit
+        from . import admin_dashboard, audit
 
         audit.connect()
+        admin_dashboard.register()
