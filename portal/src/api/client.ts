@@ -35,7 +35,8 @@ export async function request<T>(
   body?: unknown,
   extraHeaders: Record<string, string> = {},
 ): Promise<T> {
-  const headers: Record<string, string> = { Accept: "application/json", ...extraHeaders };
+  // The portal's own session, apart from the admin's and the scanner's (see apps/platform/sessions.py).
+  const headers: Record<string, string> = { Accept: "application/json", "X-Nuronteq-App": "portal", ...extraHeaders };
   if (method !== "GET") {
     headers["X-CSRFToken"] = csrfToken();
     headers["Idempotency-Key"] = crypto.randomUUID();

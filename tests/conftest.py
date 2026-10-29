@@ -2,6 +2,7 @@ import itertools
 import uuid
 
 import pytest
+from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client
 
@@ -9,8 +10,17 @@ from apps.masterdata import services
 from apps.masterdata.models import PartyRoleType
 from apps.platform.auth import create_api_client
 from apps.platform.models import Role, RoleGrant, User
+from apps.platform.sessions import COOKIES
 
 _keys = itertools.count()
+
+
+def admin_client(user: User) -> Client:
+    """A browser signed in to the admin. force_login writes the default session cookie; the admin reads its own."""
+    client = Client()
+    client.force_login(user)
+    client.cookies[COOKIES["admin"]] = client.cookies[settings.SESSION_COOKIE_NAME].value
+    return client
 
 
 class Api:
