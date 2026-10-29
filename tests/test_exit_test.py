@@ -98,7 +98,9 @@ def test_plan_then_report_a_trip_driven_with_a_dropped_signal(seeded):
     plan = ["plan", "--batch", batch, "--vehicle", "ND 123-456", "--driver-email", "sipho@example.com"]
     with pytest.raises(CommandError, match="--not-production"):
         _run(*plan)
-    planned = _run(*plan, "--not-production")
+    with pytest.raises(CommandError, match="EXIT-10281930"):
+        _run("plan", "--not-production", "--batch", "10281930", "--vehicle", "X", "--driver-email", "x@example.com")
+    planned = _run(*plan[:2], f"{batch}-3", *plan[3:], "--not-production")  # an order reference names its batch
     trip = Trip.objects.get()
     assert f"{trip.number} ({trip.pk}) is planning" in planned
     with pytest.raises(CommandError, match="not scanned onto the trip"):
