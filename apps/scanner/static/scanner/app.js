@@ -187,6 +187,7 @@
           "Content-Type": "application/json",
           Accept: "application/json",
           "X-CSRFToken": csrfToken(),
+          "X-Nuronteq-App": "scanner", // the scanner's own session, apart from the admin's and the portal's
           ...(method === "GET" ? {} : { "Idempotency-Key": uuid4() }),
         },
         body: body === undefined ? undefined : JSON.stringify(body),
@@ -216,7 +217,7 @@
       response = await fetch(API + path, {
         method: "POST",
         credentials: "same-origin",
-        headers: { Accept: "application/json", "X-CSRFToken": csrfToken(), "Idempotency-Key": uuid4() },
+        headers: { Accept: "application/json", "X-CSRFToken": csrfToken(), "X-Nuronteq-App": "scanner", "Idempotency-Key": uuid4() },
         body: form,
       });
     } catch {

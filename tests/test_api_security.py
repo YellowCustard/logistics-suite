@@ -5,7 +5,7 @@ from apps.masterdata.models import Item, Party, Site
 from apps.platform.auth import create_api_client
 from apps.platform.models import ApiClient, IdempotencyRecord, Role
 
-from .conftest import api_for, make_user
+from .conftest import admin_client, api_for, make_user
 
 pytestmark = pytest.mark.django_db
 
@@ -158,8 +158,7 @@ def test_roles_are_enforced(two_clients):
 
 def test_api_docs_are_staff_only(admin):
     assert Client().get("/api/v1/openapi.json").status_code == 302
-    staff = Client()
     admin.is_staff = True
     admin.save()
-    staff.force_login(admin)
+    staff = admin_client(admin)
     assert staff.get("/api/v1/openapi.json").status_code == 200

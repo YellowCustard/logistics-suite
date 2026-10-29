@@ -25,6 +25,8 @@ from apps.platform.models import (
 )
 from apps.platform.templatetags.nq_admin import ID_ROUTES
 
+from .conftest import admin_client
+
 pytestmark = pytest.mark.django_db
 
 KPI_LABELS = ["Active orders", "Open exceptions", "Shipments in transit", "Integration backlog"]
@@ -37,17 +39,13 @@ def superuser() -> User:
 
 @pytest.fixture
 def su_client(superuser) -> Client:
-    client = Client()
-    client.force_login(superuser)
-    return client
+    return admin_client(superuser)
 
 
 def staff_with(*codenames: str) -> Client:
     user = User.objects.create_user(email=f"staff-{len(codenames)}@example.com", password="pw-not-used", is_staff=True)
     user.user_permissions.set(Permission.objects.filter(codename__in=codenames))
-    client = Client()
-    client.force_login(user)
-    return client
+    return admin_client(user)
 
 
 def open_case(summary: str, severity: str = Severity.MEDIUM, status: str = ExceptionStatus.OPEN) -> ExceptionCase:

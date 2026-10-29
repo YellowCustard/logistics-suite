@@ -56,7 +56,7 @@ MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "apps.platform.middleware.RequestContextMiddleware",
-    "django.contrib.sessions.middleware.SessionMiddleware",
+    "apps.platform.sessions.SurfaceSessionMiddleware",  # one session per surface: admin, scanner, portal
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
