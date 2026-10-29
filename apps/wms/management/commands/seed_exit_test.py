@@ -154,7 +154,7 @@ class Command(BaseCommand):
             out.write(f"Driver login {driver_email.strip().lower()} already existed; its password is unchanged.")
         out.write("Next, plan the trip:")
         out.write(
-            f'  manage.py exit_test_trip plan --batch {batch} --vehicle "{truck.registration}" '
+            f'  manage.py exit_test_trip plan --not-production --batch {batch} --vehicle "{truck.registration}" '
             f"--driver-email {driver_email.strip().lower()}"
         )
 

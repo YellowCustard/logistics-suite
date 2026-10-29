@@ -72,7 +72,7 @@ def test_seed_packs_one_carton_per_stop_and_creates_the_driver(seeded):
     assert [g.role for g in user.role_grants.all()] == [Role.DRIVER]
     assert Person.objects.get(user_id=user.pk).is_driver
     assert "sipho@example.com  " in seeded["out"]  # the one-time password follows the email
-    assert f"exit_test_trip plan --batch {batch}" in seeded["out"]
+    assert f"exit_test_trip plan --not-production --batch {batch}" in seeded["out"]
 
 
 def test_seed_refuses_a_staff_login_as_the_driver(seeded):
